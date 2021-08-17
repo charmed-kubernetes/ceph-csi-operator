@@ -13,13 +13,14 @@ develop a new k8s charm using the Operator Framework:
 """
 
 from functools import wraps
+import itertools
 import logging
-from typing import List, Generator, Dict, Set, Callable, Optional
+from typing import List, Dict, Callable
 
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
-from ops.charm import CharmBase, RelationJoinedEvent, RelationDepartedEvent
+from ops.charm import CharmBase, RelationJoinedEvent
 from ops.framework import StoredState, StoredDict
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
@@ -58,6 +59,9 @@ class CephCsiCharm(CharmBase):
     CEPH_RELATION = 'ceph'
     K8S_NS = 'default'
 
+    XFS_STORAGE = 'ceph-xfs'
+    EXT4_STORAGE = 'ceph-ext4'
+
     RESOURCE_TEMPLATES = [
         'ceph-csi-encryption-kms-config.yaml.j2',
         'ceph-secret.yaml.j2',
@@ -79,6 +83,7 @@ class CephCsiCharm(CharmBase):
         self.framework.observe(self.on.ceph_relation_broken, self.purge_k8s_resources)
         self._stored.set_default(ceph_data=dict())
         self._stored.set_default(resources_created=False)
+        self._stored.set_default(default_storage_class=self.XFS_STORAGE)
 
         self.template_dir = self.charm_dir.joinpath('templates')
 
@@ -117,6 +122,16 @@ class CephCsiCharm(CharmBase):
             DaemonSet(app_api, 'csi-rbdplugin', self.K8S_NS),
         ]
 
+    def update_stored_state(self, config_name, stored_state_name) -> bool:
+        new_value = self.config.get(config_name)
+        old_value = self._stored.__getattr__(stored_state_name)
+
+        if old_value != new_value:
+            self._stored.__setattr__(stored_state_name, new_value)
+            return True
+
+        return False
+
     def _on_install(self, _):
         self.check_required_relations()
 
@@ -126,37 +141,56 @@ class CephCsiCharm(CharmBase):
         else:
             self.unit.status = ActiveStatus()
 
-    def create_ceph_resources(self):
-        self._stored.resources_created = True
-
+    @needs_leader
+    def create_ceph_resources(self, resources: List[Dict]):
         config.load_kube_config()
         k8s_api = client.ApiClient()
 
-        for definition in self.render_resource_definitions():
-            for resource in definition:
-                utils.create_from_dict(k8s_api, resource)
+        for resource in resources:
+            utils.create_from_dict(k8s_api, resource)
 
-    def render_resource_definitions(self) -> List[Generator[dict, None, None]]:
+    def render_resource_definitions(self) -> List[Dict]:
         env = Environment(loader=FileSystemLoader(self.template_dir))
 
         resources = [env.get_template(template).render(self._stored.ceph_data)
-                    for template in self.RESOURCE_TEMPLATES]
+                     for template in self.RESOURCE_TEMPLATES]
+
+        resource_dicts = [yaml.safe_load_all(res) for res in resources]
+        return list(itertools.chain.from_iterable(resource_dicts))
+
+    def render_storage_definitions(self) -> List[Dict]:
+        env = Environment(loader=FileSystemLoader(self.template_dir))
+        default_storage = self._stored.default_storage_class
+        storage_classes = []
 
         ext4_ctx = self.copy_stored_dict(self._stored.ceph_data)
-        ext4_ctx['default'] = self.config.get('default-storage') == 'ext4'
+        ext4_ctx['default'] = default_storage == self.EXT4_STORAGE
         ext4_ctx['pool_name'] = 'ext4-pool'
         ext4_ctx['fs_type'] = 'ext4'
         ext4_ctx['sc_name'] = 'ceph-ext4'
-        resources.append(env.get_template(self.STORAGE_CLASS_TEMPLATE).render(ext4_ctx))
+        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(ext4_ctx)
+        storage_classes.append(yaml.safe_load(resource))
 
         xfs_ctx = self.copy_stored_dict(self._stored.ceph_data)
-        xfs_ctx['default'] = self.config.get('default_storage') == 'xfs'
+        xfs_ctx['default'] = default_storage == self.XFS_STORAGE
         xfs_ctx['pool_name'] = 'xfs-pool'
         xfs_ctx['fs_type'] = 'xfs'
         xfs_ctx['sc_name'] = 'ceph-xfs'
-        resources.append(env.get_template(self.STORAGE_CLASS_TEMPLATE).render(xfs_ctx))
+        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(xfs_ctx)
+        storage_classes.append(yaml.safe_load(resource))
 
-        return [yaml.safe_load_all(resource) for resource in resources]
+        return storage_classes
+
+    def render_all_resource_definitions(self) -> List[Dict]:
+        return self.render_resource_definitions() + self.render_storage_definitions()
+
+    @needs_leader
+    def update_storage_classes(self):
+        for resource in self.resources:
+            if isinstance(resource, StorageClass):
+                resource.remove()
+        storage_classes = self.render_storage_definitions()
+        self.create_ceph_resources(storage_classes)
 
     @needs_leader
     def _on_ceph_joined(self, event: RelationJoinedEvent):
@@ -175,7 +209,9 @@ class CephCsiCharm(CharmBase):
             self.unit.status = BlockedStatus('Ceph relation is missing data.')
             return
 
-        self.create_ceph_resources()
+        all_resources = self.render_all_resource_definitions()
+        self.create_ceph_resources(all_resources)
+        self._stored.resources_created = True
         self.check_required_relations()
 
     @needs_leader
@@ -196,20 +232,8 @@ class CephCsiCharm(CharmBase):
         self.unit.status = BlockedStatus("Missing relations: ceph")
 
     def _on_config_changed(self, _):
-        """Just an example to show how to deal with changed configuration.
-
-        TEMPLATE-TODO: change this example to suit your needs.
-        If you don't need to handle config, you can remove this method,
-        the hook created in __init__.py for it, the corresponding test,
-        and the config.py file.
-
-        Learn more about config at https://juju.is/docs/sdk/config
-        """
-        # current = self.config["thing"]
-        # if current not in self._stored.things:
-        #     logger.debug("found a new thing: %r", current)
-        #     self._stored.things.append(current)
-        pass
+        if self.update_stored_state('default-storage', 'default_storage_class'):
+            self.update_storage_classes()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,6 @@
 
 options:
   default-storage:
-    default: ext4🎁
+    default: ceph-xfs
     description: "TODO: description"
     type: string
