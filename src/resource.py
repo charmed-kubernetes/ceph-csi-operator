@@ -9,21 +9,29 @@ from kubernetes.client import (
 )
 
 
-class Resource(ABC):
+class MissingMethod(BaseException):
+    pass
+
+
+class Resource:
 
     def __init__(self, name: str, namespace: str = ''):
         self.name = name
         self.namespace = namespace
 
     @property
-    @abstractmethod
     def _remove_action(self) -> Callable:
         """Return method of k8s api client that removes cluster resource."""
+        raise MissingMethod("Removal of {} {} is not "
+                            "implemented".format(self.__class__.__name__,
+                                                 self.name))
 
     @property
-    @abstractmethod
     def _remove_namespaced_action(self) -> Callable:
         """Return method of k8s api client that removes namespaced resource."""
+        raise MissingMethod("Removal of namespaced {} {} is not "
+                            "implemented".format(self.__class__.__name__,
+                                                 self.name))
 
     def remove(self):
         if self.namespace:
@@ -38,28 +46,12 @@ class CoreResource(Resource):
         super().__init__(name=name, namespace=namespace)
         self.api = api
 
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class AuthResource(Resource):
 
     def __init__(self, api: RbacAuthApi, name: str, namespace: str = ''):
         super().__init__(name, namespace)
         self.api = api
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
 
 
 class StorageResource(Resource):
@@ -68,14 +60,6 @@ class StorageResource(Resource):
         super().__init__(name, namespace)
         self.api = api
 
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class AppsResource(Resource):
 
@@ -83,20 +67,8 @@ class AppsResource(Resource):
         super().__init__(name, namespace)
         self.api = api
 
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class Secret(CoreResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
@@ -106,10 +78,6 @@ class Secret(CoreResource):
 class ServiceAccount(CoreResource):
 
     @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
     def _remove_namespaced_action(self) -> Callable:
         return self.api.delete_namespaced_service_account
 
@@ -117,19 +85,11 @@ class ServiceAccount(CoreResource):
 class Service(CoreResource):
 
     @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
-
-    @property
     def _remove_namespaced_action(self) -> Callable:
         return self.api.delete_namespaced_service
 
 
 class ConfigMap(CoreResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
@@ -142,10 +102,6 @@ class ClusterRole(AuthResource):
     def _remove_action(self) -> Callable:
         return self.api.delete_cluster_role
 
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class ClusterRoleBinding(AuthResource):
 
@@ -153,16 +109,8 @@ class ClusterRoleBinding(AuthResource):
     def _remove_action(self) -> Callable:
         return self.api.delete_cluster_role_binding
 
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class Role(AuthResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
@@ -170,10 +118,6 @@ class Role(AuthResource):
 
 
 class RoleBinding(AuthResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
@@ -186,16 +130,8 @@ class StorageClass(StorageResource):
     def _remove_action(self) -> Callable:
         return self.api.delete_storage_class
 
-    @property
-    def _remove_namespaced_action(self) -> Callable:
-        raise NotImplementedError()
-
 
 class Deployment(AppsResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
@@ -203,10 +139,6 @@ class Deployment(AppsResource):
 
 
 class DaemonSet(AppsResource):
-
-    @property
-    def _remove_action(self) -> Callable:
-        raise NotImplementedError()
 
     @property
     def _remove_namespaced_action(self) -> Callable:
