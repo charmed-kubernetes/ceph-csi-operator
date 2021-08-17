@@ -1,0 +1,4 @@
+ops >= 1.2.0
+kubernetes
+jinja2
+pyyaml

@@ -1,0 +1,24 @@
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+{% if default == true %}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+{% endif %}
+  name: '{{ sc_name }}'
+mountOptions:
+- discard
+parameters:
+  clusterID: '{{ fsid }}'
+  csi.storage.k8s.io/controller-expand-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/controller-expand-secret-namespace: default
+  csi.storage.k8s.io/fstype: '{{ fs_type }}'
+  csi.storage.k8s.io/node-stage-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/node-stage-secret-namespace: default
+  csi.storage.k8s.io/provisioner-secret-name: csi-rbd-secret
+  csi.storage.k8s.io/provisioner-secret-namespace: default
+  imageFeatures: layering
+  pool: '{{ pool_name }}'
+provisioner: rbd.csi.ceph.com
+reclaimPolicy: Delete
