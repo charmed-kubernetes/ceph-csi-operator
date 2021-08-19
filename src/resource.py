@@ -9,19 +9,17 @@
 This module contains classes that wrap kubernetes resources and enable unified
 interface for their removal.
 """
+# Remove this pylint skip when functionality is added to `Resource` class
+# pylint: disable=too-few-public-methods
 from typing import Callable
 
-from kubernetes.client import (
-    CoreV1Api,
-    RbacAuthorizationV1Api as RbacAuthApi,
-    StorageV1Api,
-    AppsV1Api
-)
+from kubernetes.client import AppsV1Api, CoreV1Api
+from kubernetes.client import RbacAuthorizationV1Api as RbacAuthApi
+from kubernetes.client import StorageV1Api
 
 
 class MissingMethod(BaseException):
     """Exception that represents method that is not implemented."""
-    pass
 
 
 class Resource:
@@ -62,9 +60,6 @@ class Resource:
             self._remove_namespaced_action(self.name, self.namespace)
         else:
             self._remove_action(self.name)
-
-    def test(self):
-        print(self.name)
 
 
 class CoreResource(Resource):

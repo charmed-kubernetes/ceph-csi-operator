@@ -12,34 +12,22 @@ develop a new k8s charm using the Operator Framework:
     https://discourse.charmhub.io/t/4208
 """
 
-from functools import wraps
 import itertools
 import logging
-from typing import List, Dict, Callable
+from functools import wraps
+from resource import (ClusterRole, ClusterRoleBinding, ConfigMap, DaemonSet,
+                      Deployment, Resource, Role, RoleBinding, Secret, Service,
+                      ServiceAccount, StorageClass)
+from typing import Callable, Dict, List
 
+import yaml
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
 from ops.charm import CharmBase, RelationJoinedEvent
-from ops.framework import StoredState, StoredDict
+from ops.framework import StoredDict, StoredState
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
-import yaml
-
-from resource import (
-    ClusterRole,
-    ClusterRoleBinding,
-    ConfigMap,
-    DaemonSet,
-    Deployment,
-    Secret,
-    Service,
-    ServiceAccount,
-    StorageClass,
-    Resource,
-    Role,
-    RoleBinding,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +87,7 @@ class CephCsiCharm(CharmBase):
         :param stored_dict: StoredDict instance to be copied
         :return: copy of stored_dict
         """
-        return {key: value for key, value in stored_dict.items()}
+        return dict(stored_dict.items())
 
     @property
     def resources(self) -> List[Resource]:
@@ -182,7 +170,7 @@ class CephCsiCharm(CharmBase):
             self.unit.status = ActiveStatus()
 
     @needs_leader
-    def create_ceph_resources(self, resources: List[Dict]) -> None:
+    def create_ceph_resources(self, resources: List[Dict]) -> None:  # pylint: disable=R0201
         """Use kubernetes api to create resources like Pods, Secrets, etc.
 
         :param resources: list of dictionaries describing resources
