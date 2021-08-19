@@ -2,11 +2,33 @@
 
 ## Description
 
-TODO: Describe your charm in a few paragraphs of Markdown
+This is a subordinate charm of [kubernetes-master][1], deployed as part of the
+[Charmed Kubernetes][2] and enables Kubernetes cluster to use Ceph as a
+storage. Currently supported storage options are `ceph-xfs` and `ceph-ext4`
+with `cephfs` being work in progress.
 
 ## Usage
 
-TODO: Provide high-level usage, such as required config or relations
+Since this charm is not published in charmstore yet, it needs to be built from
+source.
+
+    $ charmcraft pack  #This will produce `ceph-csi.charm`
+
+As this charm has no standalone functionality, we'll need `Kubernetes` and
+`Ceph` cluster first.
+
+    $ juju deploy charmed-kubernetes
+    $ juju deploy -n 3 ceph-mon
+    $ juju deploy -n 3 ceph-osd
+    $ juju add-relation ceph-osd ceph-mon
+    
+Once the deployment settled, We can add `ceph-csi`
+
+    $ juju deploy ./ceph-csi.charm
+    $ juju add-relation kubernetes-master
+    $ juju add-relation ceph-mon
+    
+
 
 
 ## Developing
@@ -23,3 +45,6 @@ The Python operator framework includes a very nice harness for testing
 operator behaviour without full deployment. Just `run_tests`:
 
     ./run_tests
+
+[1]: https://charmhub.io/containers-kubernetes-master
+[2]: https://charmhub.io/charmed-kubernetes

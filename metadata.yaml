@@ -2,9 +2,11 @@
 # See LICENSE file for licensing details.
 name: ceph-csi
 description: |
-  TEMPLATE-TODO: fill out the charm's description
+  This (machine) charm deploys Container Storage Interface (CSI) plugin that
+  enables Charmed Kubernetes (CDK) to use ceph as a storage backend.
 summary: |
-  TEMPLATE-TODO: fill out the charm's summary
+  This (machine) charm deploys Container Storage Interface (CSI) plugin that
+  enables Charmed Kubernetes (CDK) to use ceph as a storage backend.
 
 requires:
   ceph:
@@ -14,14 +16,3 @@ requires:
     scope: container
 
 subordinate: true
-# TEMPLATE-TODO: replace with containers for your workload (delete for non-k8s)
-#containers:
-#  httpbin:
-#    resource: httpbin-image
-
-# TEMPLATE-TODO: each container defined above must specify an oci-image resource
-#resources:
-#  httpbin-image:
-#    type: oci-image
-#    description: OCI image for httpbin (kennethreitz/httpbin)
-
