@@ -1,3 +1,9 @@
 -r requirements.txt
 coverage
 flake8
+pylint
+mypy
+tox
+isort
+black
+types-PyYAML

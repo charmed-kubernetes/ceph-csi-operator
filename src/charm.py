@@ -12,92 +12,292 @@ develop a new k8s charm using the Operator Framework:
     https://discourse.charmhub.io/t/4208
 """
 
+import itertools
 import logging
+from functools import wraps
+from resource import (
+    ClusterRole,
+    ClusterRoleBinding,
+    ConfigMap,
+    DaemonSet,
+    Deployment,
+    Resource,
+    Role,
+    RoleBinding,
+    Secret,
+    Service,
+    ServiceAccount,
+    StorageClass,
+)
+from typing import Any, Callable, Dict, List
 
-from ops.charm import CharmBase
-from ops.framework import StoredState
+import yaml
+from jinja2 import Environment, FileSystemLoader
+from kubernetes import client, config, utils
+from kubernetes.client.exceptions import ApiException
+from ops.charm import (
+    CharmBase,
+    ConfigChangedEvent,
+    InstallEvent,
+    RelationDepartedEvent,
+    RelationJoinedEvent,
+)
+from ops.framework import StoredDict, StoredState
 from ops.main import main
-from ops.model import ActiveStatus
+from ops.model import ActiveStatus, BlockedStatus
 
 logger = logging.getLogger(__name__)
+
+
+def needs_leader(func: Callable) -> Callable:
+    """Ensure that function with this decorator is executed only if on leader units."""
+
+    @wraps(func)
+    def leader_check(self: CharmBase, *args: Any, **kwargs: Any) -> Any:
+        if self.unit.is_leader():
+            func(self, *args, **kwargs)
+
+    return leader_check
 
 
 class CephCsiCharm(CharmBase):
     """Charm the service."""
 
+    CEPH_RELATION = "ceph"
+    K8S_NS = "default"
+
+    XFS_STORAGE = "ceph-xfs"
+    EXT4_STORAGE = "ceph-ext4"
+
+    RESOURCE_TEMPLATES = [
+        "ceph-csi-encryption-kms-config.yaml.j2",
+        "ceph-secret.yaml.j2",
+        "csi-config-map.yaml.j2",
+        "csi-nodeplugin-rbac.yaml.j2",
+        "csi-provisioner-rbac.yaml.j2",
+        "csi-rbdplugin-provisioner.yaml.j2",
+        "csi-rbdplugin.yaml.j2",
+    ]
+    STORAGE_CLASS_TEMPLATE = "ceph-storageclass.yaml.j2"
+
     _stored = StoredState()
 
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
+        """Setup even observers and initial storage values."""
         super().__init__(*args)
-        self.framework.observe(self.on.httpbin_pebble_ready, self._on_httpbin_pebble_ready)
+        self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
-        self.framework.observe(self.on.fortune_action, self._on_fortune_action)
-        self._stored.set_default(things=[])
+        self.framework.observe(self.on.ceph_relation_joined, self._on_ceph_joined)
+        self.framework.observe(self.on.ceph_relation_broken, self.purge_k8s_resources)
+        self._stored.set_default(ceph_data=dict())
+        self._stored.set_default(resources_created=False)
+        self._stored.set_default(default_storage_class=self.XFS_STORAGE)
 
-    def _on_httpbin_pebble_ready(self, event):
-        """Define and start a workload using the Pebble API.
+        self.template_dir = self.charm_dir.joinpath("templates")
 
-        TEMPLATE-TODO: change this example to suit your needs.
-        You'll need to specify the right entrypoint and environment
-        configuration for your specific workload. Tip: you can see the
-        standard entrypoint of an existing container using docker inspect
+    @staticmethod
+    def copy_stored_dict(stored_dict: StoredDict) -> dict:
+        """Return copy of StoredDict as a basic dict.
 
-        Learn more about Pebble layers at https://github.com/canonical/pebble
+        This is a convenience function as the StoredDict object does not implement
+        copy() method.
+
+        :param stored_dict: StoredDict instance to be copied
+        :return: copy of stored_dict
         """
-        # Get a reference the container attribute on the PebbleReadyEvent
-        container = event.workload
-        # Define an initial Pebble layer configuration
-        pebble_layer = {
-            "summary": "httpbin layer",
-            "description": "pebble config layer for httpbin",
-            "services": {
-                "httpbin": {
-                    "override": "replace",
-                    "summary": "httpbin",
-                    "command": "gunicorn -b 0.0.0.0:80 httpbin:app -k gevent",
-                    "startup": "enabled",
-                    "environment": {"thing": self.model.config["thing"]},
-                }
-            },
-        }
-        # Add intial Pebble config layer using the Pebble API
-        container.add_layer("httpbin", pebble_layer, combine=True)
-        # Autostart any services that were defined with startup: enabled
-        container.autostart()
-        # Learn more about statuses in the SDK docs:
-        # https://juju.is/docs/sdk/constructs#heading--statuses
-        self.unit.status = ActiveStatus()
+        return dict(stored_dict.items())
 
-    def _on_config_changed(self, _):
-        """Just an example to show how to deal with changed configuration.
+    @property
+    def resources(self) -> List[Resource]:
+        """Return list of k8s resources tied to the ceph-csi charm.
 
-        TEMPLATE-TODO: change this example to suit your needs.
-        If you don't need to handle config, you can remove this method,
-        the hook created in __init__.py for it, the corresponding test,
-        and the config.py file.
+        Returned list contains instances that inherit from `Resource` class
+        which provides convenience method `remove()` that removes resources
+        from cluster or namespace.
 
-        Learn more about config at https://juju.is/docs/sdk/config
+        Example:
+            for resource in self.resources:
+                try:
+                    resource.remove()
+                except ApiException as exc:
+                    if exc.status == 404:
+                        pass  # Resource already deleted.
+                    else:
+                        raise exc
         """
-        current = self.config["thing"]
-        if current not in self._stored.things:
-            logger.debug("found a new thing: %r", current)
-            self._stored.things.append(current)
+        config.load_kube_config()
 
-    def _on_fortune_action(self, event):
-        """Just an example to show how to receive actions.
+        core_api = client.CoreV1Api()
+        auth_api = client.RbacAuthorizationV1Api()
+        storage_api = client.StorageV1Api()
+        app_api = client.AppsV1Api()
 
-        TEMPLATE-TODO: change this example to suit your needs.
-        If you don't need to handle actions, you can remove this method,
-        the hook created in __init__.py for it, the corresponding test,
-        and the actions.py file.
+        return [
+            Secret(core_api, "csi-rbd-secret", self.K8S_NS),
+            ServiceAccount(core_api, "rbd-csi-nodeplugin", self.K8S_NS),
+            ServiceAccount(core_api, "rbd-csi-provisioner", self.K8S_NS),
+            ClusterRole(auth_api, "rbd-csi-nodeplugin"),
+            ClusterRole(auth_api, "rbd-csi-nodeplugin-rules"),
+            ClusterRole(auth_api, "rbd-external-provisioner-runner-rules"),
+            ClusterRole(auth_api, "rbd-external-provisioner-runner"),
+            ClusterRoleBinding(auth_api, "rbd-csi-nodeplugin"),
+            ClusterRoleBinding(auth_api, "rbd-csi-provisioner-role"),
+            Role(auth_api, "rbd-external-provisioner-cfg", self.K8S_NS),
+            RoleBinding(auth_api, "rbd-csi-provisioner-role-cfg", self.K8S_NS),
+            StorageClass(storage_api, "ceph-ext4"),
+            StorageClass(storage_api, "ceph-xfs"),
+            Service(core_api, "csi-metrics-rbdplugin", self.K8S_NS),
+            Service(core_api, "csi-rbdplugin-provisioner", self.K8S_NS),
+            Deployment(app_api, "csi-rbdplugin-provisioner", self.K8S_NS),
+            ConfigMap(core_api, "ceph-csi-config", self.K8S_NS),
+            ConfigMap(core_api, "ceph-csi-encryption-kms-config", self.K8S_NS),
+            DaemonSet(app_api, "csi-rbdplugin", self.K8S_NS),
+        ]
 
-        Learn more about actions at https://juju.is/docs/sdk/actions
+    def update_stored_state(self, config_name: str, stored_state_name: str) -> bool:
+        """Update value in stored stated based on the value from config.
+
+        Since ConfigChangedEvent does not provide information about which config options
+        were updated, this convenience method allows you to pass name of the config
+        option and name of the corresponding variable in StoredState. If the values
+        do not match, StoredState variable is updated with new value and `True` is
+        returned.
+
+        :param config_name: Name of the config option
+        :param stored_state_name: Corresponding StoredState variable name
+        :return: True if value change otherwise False
         """
-        fail = event.params["fail"]
-        if fail:
-            event.fail(fail)
+        new_value = self.config.get(config_name)
+        old_value = self._stored.__getattr__(stored_state_name)
+
+        if old_value != new_value:
+            self._stored.__setattr__(stored_state_name, new_value)
+            return True
+
+        return False
+
+    def _on_install(self, _: InstallEvent) -> None:
+        """Execute "on install" event callback."""
+        self.check_required_relations()
+
+    def check_required_relations(self) -> None:
+        """Run check if any required relations are missing"""
+        if self.model.get_relation(self.CEPH_RELATION) is None:
+            self.unit.status = BlockedStatus("Missing relations: ceph")
         else:
-            event.set_results({"fortune": "A bug in the code is worth two in the documentation."})
+            self.unit.status = ActiveStatus()
+
+    @needs_leader
+    def create_ceph_resources(self, resources: List[Dict]) -> None:  # pylint: disable=R0201
+        """Use kubernetes api to create resources like Pods, Secrets, etc.
+
+        :param resources: list of dictionaries describing resources
+        :return: None
+        """
+        config.load_kube_config()
+        k8s_api = client.ApiClient()
+
+        for resource in resources:
+            utils.create_from_dict(k8s_api, resource)
+
+    def render_resource_definitions(self) -> List[Dict]:
+        """Render resource definitions from templates in self.RESOURCE_TEMPLATES."""
+        env = Environment(loader=FileSystemLoader(self.template_dir))
+
+        resources = [
+            env.get_template(template).render(self._stored.ceph_data)
+            for template in self.RESOURCE_TEMPLATES
+        ]
+
+        resource_dicts = [yaml.safe_load_all(res) for res in resources]
+        return list(itertools.chain.from_iterable(resource_dicts))
+
+    def render_storage_definitions(self) -> List[Dict]:
+        """Render StorageClass definitions for supported filesystem types."""
+        env = Environment(loader=FileSystemLoader(self.template_dir))
+        default_storage = self._stored.default_storage_class
+        storage_classes = []
+
+        ext4_ctx = self.copy_stored_dict(self._stored.ceph_data)
+        ext4_ctx["default"] = default_storage == self.EXT4_STORAGE
+        ext4_ctx["pool_name"] = "ext4-pool"
+        ext4_ctx["fs_type"] = "ext4"
+        ext4_ctx["sc_name"] = "ceph-ext4"
+        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(ext4_ctx)
+        storage_classes.append(yaml.safe_load(resource))
+
+        xfs_ctx = self.copy_stored_dict(self._stored.ceph_data)
+        xfs_ctx["default"] = default_storage == self.XFS_STORAGE
+        xfs_ctx["pool_name"] = "xfs-pool"
+        xfs_ctx["fs_type"] = "xfs"
+        xfs_ctx["sc_name"] = "ceph-xfs"
+        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(xfs_ctx)
+        storage_classes.append(yaml.safe_load(resource))
+
+        return storage_classes
+
+    def render_all_resource_definitions(self) -> List[Dict]:
+        """Render all resources required for ceph-csi."""
+        return self.render_resource_definitions() + self.render_storage_definitions()
+
+    @needs_leader
+    def update_storage_classes(self) -> None:
+        """Re-render templates and update StorageClass resources in k8s cluster."""
+        for resource in self.resources:
+            if isinstance(resource, StorageClass):
+                resource.remove()
+        storage_classes = self.render_storage_definitions()
+        self.create_ceph_resources(storage_classes)
+
+    @needs_leader
+    def _on_ceph_joined(self, event: RelationJoinedEvent) -> None:
+        """Create necessary k8s resources when relation is formed with ceph-mon."""
+        if self._stored.resources_created:
+            # Skip silently if other ceph_relation_joined event already
+            # created resources
+            return
+
+        unit_data = event.relation.data[event.unit]
+        expected_data = ("fsid", "key", "mon_hosts")
+        for key in expected_data:
+            self._stored.ceph_data[key] = unit_data.get(key)
+        missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
+        if missing_data:
+            logger.warning(
+                "Ceph relation with %s is missing data: %s", event.unit.name, missing_data
+            )
+            self.unit.status = BlockedStatus("Ceph relation is missing data.")
+            return
+
+        all_resources = self.render_all_resource_definitions()
+        self.create_ceph_resources(all_resources)
+        self._stored.resources_created = True
+        self.check_required_relations()
+
+    @needs_leader
+    def purge_k8s_resources(self, _: RelationDepartedEvent) -> None:
+        """Purge k8s resources created by this charm."""
+        for resource in self.resources:
+            try:
+                logger.debug(
+                    "Removing resource %s (namespace=%s)",
+                    resource.name,
+                    (resource.namespace or None),
+                )
+                resource.remove()
+            except ApiException as exc:
+                if exc.status == 404:
+                    logger.info("Resource %s is already removed.", resource.name)
+                else:
+                    raise exc
+
+        self._stored.resources_created = False
+        self.unit.status = BlockedStatus("Missing relations: ceph")
+
+    def _on_config_changed(self, _: ConfigChangedEvent) -> None:
+        """Handle configuration Change."""
+        if self.update_stored_state("default-storage", "default_storage_class"):
+            self.update_storage_classes()
 
 
 if __name__ == "__main__":
