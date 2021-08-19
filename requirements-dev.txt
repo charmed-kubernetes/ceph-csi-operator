@@ -6,3 +6,4 @@ mypy
 tox
 isort
 black
+types-PyYAML

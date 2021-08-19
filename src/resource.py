@@ -54,7 +54,7 @@ class Resource:
                             "implemented".format(self.__class__.__name__,
                                                  self.name))
 
-    def remove(self):
+    def remove(self) -> None:
         """Call appropriate api method to remove k8s resource."""
         if self.namespace:
             self._remove_namespaced_action(self.name, self.namespace)

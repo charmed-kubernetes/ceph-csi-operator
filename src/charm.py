@@ -18,13 +18,14 @@ from functools import wraps
 from resource import (ClusterRole, ClusterRoleBinding, ConfigMap, DaemonSet,
                       Deployment, Resource, Role, RoleBinding, Secret, Service,
                       ServiceAccount, StorageClass)
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
-from ops.charm import CharmBase, RelationJoinedEvent
+from ops.charm import (CharmBase, RelationJoinedEvent, InstallEvent,
+                       RelationDepartedEvent, ConfigChangedEvent)
 from ops.framework import StoredDict, StoredState
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 def needs_leader(func: Callable) -> Callable:
     """Ensure that function with this decorator is executed only if on leader units."""
     @wraps(func)
-    def leader_check(self: CharmBase, *args, **kwargs):
+    def leader_check(self: CharmBase, *args: Any, **kwargs: Any) -> Any:
         if self.unit.is_leader():
             func(self, *args, **kwargs)
 
@@ -64,7 +65,7 @@ class CephCsiCharm(CharmBase):
 
     _stored = StoredState()
 
-    def __init__(self, *args):
+    def __init__(self, *args: Any) -> None:
         """Setup even observers and initial storage values."""
         super().__init__(*args)
         self.framework.observe(self.on.install, self._on_install)
@@ -158,11 +159,11 @@ class CephCsiCharm(CharmBase):
 
         return False
 
-    def _on_install(self, _):
-        """Execut "on install" event callback."""
+    def _on_install(self, _: InstallEvent) -> None:
+        """Execute "on install" event callback."""
         self.check_required_relations()
 
-    def check_required_relations(self):
+    def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
         if self.model.get_relation(self.CEPH_RELATION) is None:
             self.unit.status = BlockedStatus("Missing relations: ceph")
@@ -221,7 +222,7 @@ class CephCsiCharm(CharmBase):
         return self.render_resource_definitions() + self.render_storage_definitions()
 
     @needs_leader
-    def update_storage_classes(self):
+    def update_storage_classes(self) -> None:
         """Re-render templates and update StorageClass resources in k8s cluster."""
         for resource in self.resources:
             if isinstance(resource, StorageClass):
@@ -230,7 +231,7 @@ class CephCsiCharm(CharmBase):
         self.create_ceph_resources(storage_classes)
 
     @needs_leader
-    def _on_ceph_joined(self, event: RelationJoinedEvent):
+    def _on_ceph_joined(self, event: RelationJoinedEvent) -> None:
         """Create necessary k8s resources when relation is formed with ceph-mon."""
         if self._stored.resources_created:
             # Skip silently if other ceph_relation_joined event already
@@ -254,7 +255,7 @@ class CephCsiCharm(CharmBase):
         self.check_required_relations()
 
     @needs_leader
-    def purge_k8s_resources(self, _):
+    def purge_k8s_resources(self, _: RelationDepartedEvent) -> None:
         """Purge k8s resources created by this charm."""
         for resource in self.resources:
             try:
@@ -271,7 +272,7 @@ class CephCsiCharm(CharmBase):
         self._stored.resources_created = False
         self.unit.status = BlockedStatus("Missing relations: ceph")
 
-    def _on_config_changed(self, _):
+    def _on_config_changed(self, _:ConfigChangedEvent) -> None:
         """Handle configuration Change."""
         if self.update_stored_state('default-storage', 'default_storage_class'):
             self.update_storage_classes()
