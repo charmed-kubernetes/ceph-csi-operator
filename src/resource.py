@@ -29,7 +29,7 @@ class Resource:
     that calls appropriate k8s api method.
     """
 
-    def __init__(self, name: str, namespace: str = ''):
+    def __init__(self, name: str, namespace: str = ""):
         """
         Initialize k8s resource with name and optionally namespace.
 
@@ -43,16 +43,17 @@ class Resource:
     @property
     def _remove_action(self) -> Callable:
         """Return method of k8s api client that removes cluster resource."""
-        raise MissingMethod("Removal of {} {} is not "
-                            "implemented".format(self.__class__.__name__,
-                                                 self.name))
+        raise MissingMethod(
+            "Removal of {} {} is not " "implemented".format(self.__class__.__name__, self.name)
+        )
 
     @property
     def _remove_namespaced_action(self) -> Callable:
         """Return method of k8s api client that removes namespaced resource."""
-        raise MissingMethod("Removal of namespaced {} {} is not "
-                            "implemented".format(self.__class__.__name__,
-                                                 self.name))
+        raise MissingMethod(
+            "Removal of namespaced {} {} is not "
+            "implemented".format(self.__class__.__name__, self.name)
+        )
 
     def remove(self) -> None:
         """Call appropriate api method to remove k8s resource."""
@@ -65,7 +66,7 @@ class Resource:
 class CoreResource(Resource):
     """Base class for resources associated with k8s CoreApi."""
 
-    def __init__(self, api: CoreV1Api, name: str, namespace: str = ''):
+    def __init__(self, api: CoreV1Api, name: str, namespace: str = ""):
         """Initialize k8s resource managed via CoreApi.
 
         If namespace is not provided, resource is treated as cluster-wide.
@@ -80,7 +81,7 @@ class CoreResource(Resource):
 class AuthResource(Resource):
     """Base class for resources associated with k8s RbacAuthorizationApi."""
 
-    def __init__(self, api: RbacAuthApi, name: str, namespace: str = ''):
+    def __init__(self, api: RbacAuthApi, name: str, namespace: str = ""):
         """Initialize k8s resource managed via RbacAuthorizationApi.
 
         If namespace is not provided, resource is treated as cluster-wide.
@@ -95,7 +96,7 @@ class AuthResource(Resource):
 class StorageResource(Resource):
     """Base class for resources associated with k8s StorageApi"""
 
-    def __init__(self, api: StorageV1Api, name: str, namespace: str = ''):
+    def __init__(self, api: StorageV1Api, name: str, namespace: str = ""):
         """Initialize k8s resource managed via StorageApi.
 
         If namespace is not provided, resource is treated as cluster-wide.
@@ -110,7 +111,7 @@ class StorageResource(Resource):
 class AppsResource(Resource):
     """Base class for resources associated with k8s AppsApi"""
 
-    def __init__(self, api: AppsV1Api, name: str, namespace: str = ''):
+    def __init__(self, api: AppsV1Api, name: str, namespace: str = ""):
         """Initialize k8s resource managed via Apps.
 
         If namespace is not provided, resource is treated as cluster-wide.
