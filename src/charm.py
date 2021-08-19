@@ -15,17 +15,33 @@ develop a new k8s charm using the Operator Framework:
 import itertools
 import logging
 from functools import wraps
-from resource import (ClusterRole, ClusterRoleBinding, ConfigMap, DaemonSet,
-                      Deployment, Resource, Role, RoleBinding, Secret, Service,
-                      ServiceAccount, StorageClass)
+from resource import (
+    ClusterRole,
+    ClusterRoleBinding,
+    ConfigMap,
+    DaemonSet,
+    Deployment,
+    Resource,
+    Role,
+    RoleBinding,
+    Secret,
+    Service,
+    ServiceAccount,
+    StorageClass,
+)
 from typing import Any, Callable, Dict, List
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
-from ops.charm import (CharmBase, ConfigChangedEvent, InstallEvent,
-                       RelationDepartedEvent, RelationJoinedEvent)
+from ops.charm import (
+    CharmBase,
+    ConfigChangedEvent,
+    InstallEvent,
+    RelationDepartedEvent,
+    RelationJoinedEvent,
+)
 from ops.framework import StoredDict, StoredState
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
