@@ -44,7 +44,7 @@ from ops.charm import (
 )
 from ops.framework import StoredDict, StoredState
 from ops.main import main
-from ops.model import ActiveStatus, BlockedStatus
+from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -120,9 +120,7 @@ class CephCsiCharm(CharmBase):
                 try:
                     resource.remove()
                 except ApiException as exc:
-                    if exc.status == 404:
-                        pass  # Resource already deleted.
-                    else:
+                    if exc.status != 404: # Don't raise exception if it's is already gone
                         raise exc
         """
         config.load_kube_config()
@@ -183,9 +181,9 @@ class CephCsiCharm(CharmBase):
     def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
         if self.model.get_relation(self.CEPH_RELATION) is None:
-            self.unit.status = BlockedStatus("Missing relations: ceph")
+            self.unit.status = WaitingStatus("Missing relations: ceph")
         else:
-            self.unit.status = ActiveStatus()
+            self.unit.status = ActiveStatus("Unit is ready")
 
     @needs_leader
     def create_ceph_resources(self, resources: List[Dict]) -> None:  # pylint: disable=R0201
@@ -286,10 +284,9 @@ class CephCsiCharm(CharmBase):
                 )
                 resource.remove()
             except ApiException as exc:
-                if exc.status == 404:
-                    logger.info("Resource %s is already removed.", resource.name)
-                else:
+                if exc.status != 404:
                     raise exc
+                logger.info("Resource %s is already removed.", resource.name)
 
         self._stored.resources_created = False
         self.unit.status = BlockedStatus("Missing relations: ceph")
