@@ -25,8 +25,8 @@ As this charm has no standalone functionality, we'll need `Kubernetes` and
 Once the deployment settled, We can add `ceph-csi`
 
     $ juju deploy ./ceph-csi.charm
-    $ juju add-relation kubernetes-master
-    $ juju add-relation ceph-mon
+    $ juju add-relation ceph-csi kubernetes-master
+    $ juju add-relation ceph-csi ceph-mon
     
 
 
