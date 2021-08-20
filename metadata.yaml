@@ -7,7 +7,10 @@ description: |
 summary: |
   This (machine) charm deploys Container Storage Interface (CSI) plugin that
   enables Charmed Kubernetes (CDK) to use ceph as a storage backend.
-
+series:
+  - focal
+  - bionic
+  - xenial
 requires:
   ceph:
     interface: ceph-admin
