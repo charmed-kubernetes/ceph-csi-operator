@@ -7,17 +7,22 @@ This is a subordinate charm of [kubernetes-master][1], deployed as part of the
 storage. Currently supported storage options are `ceph-xfs` and `ceph-ext4`
 with `cephfs` being work in progress.
 
+**__Note:__** This charm creates various Kubernetes resources, including pods.
+Therefore it requires `kubernetes-master` to run in privileged mode (config
+option `allow-privileged=true`) 
+
 ## Usage
 
 Since this charm is not published in charmstore yet, it needs to be built from
 source.
 
-    $ charmcraft pack  #This will produce `ceph-csi.charm`
+    $ charmcraft pack  # This will produce `ceph-csi.charm`
 
 As this charm has no standalone functionality, we'll need `Kubernetes` and
 `Ceph` cluster first.
 
     $ juju deploy charmed-kubernetes
+    $ juju config kubernetes-master allow-privileged=true
     $ juju deploy -n 3 ceph-mon
     $ juju deploy -n 3 ceph-osd
     $ juju add-relation ceph-osd ceph-mon
