@@ -11,11 +11,14 @@ interface for their removal.
 """
 # Remove this pylint skip when functionality is added to `Resource` class
 # pylint: disable=too-few-public-methods
+import logging
 from typing import Callable
 
 from kubernetes.client import AppsV1Api, CoreV1Api
 from kubernetes.client import RbacAuthorizationV1Api as RbacAuthApi
 from kubernetes.client import StorageV1Api
+
+logger = logging.getLogger(__name__)
 
 
 class MissingMethod(BaseException):
@@ -58,8 +61,19 @@ class Resource:
     def remove(self) -> None:
         """Call appropriate api method to remove k8s resource."""
         if self.namespace:
+            logger.debug(
+                "Removing Kubernetes resource '%s' (%s) from namespace '%s'",
+                self.name,
+                self.__class__.__name__,
+                self.namespace,
+            )
             self._remove_namespaced_action(self.name, self.namespace)
         else:
+            logger.debug(
+                "Removing cluster-wide Kubernetes resource '%s' (%s)",
+                self.name,
+                self.__class__.__name__,
+            )
             self._remove_action(self.name)
 
 

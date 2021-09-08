@@ -56,6 +56,12 @@ def needs_leader(func: Callable) -> Callable:
     def leader_check(self: CharmBase, *args: Any, **kwargs: Any) -> Any:
         if self.unit.is_leader():
             func(self, *args, **kwargs)
+        else:
+            logger.info(
+                "Execution of function '%s' skipped. This function can be executed only "
+                "by the leader unit.",
+                func.__name__,
+            )
 
     return leader_check
 
@@ -169,6 +175,7 @@ class CephCsiCharm(CharmBase):
         old_value = self._stored.__getattr__(stored_state_name)
 
         if old_value != new_value:
+            logger.info("Updating stored state: %s=%s", stored_state_name, new_value)
             self._stored.__setattr__(stored_state_name, new_value)
             return True
 
@@ -181,7 +188,7 @@ class CephCsiCharm(CharmBase):
     def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
         if self.model.get_relation(self.CEPH_RELATION) is None:
-            self.unit.status = WaitingStatus("Missing relations: ceph")
+            self.unit.status = BlockedStatus("Missing relations: ceph")
         else:
             self.unit.status = ActiveStatus("Unit is ready")
 
@@ -195,7 +202,11 @@ class CephCsiCharm(CharmBase):
         config.load_kube_config()
         k8s_api = client.ApiClient()
 
+        logger.info("Creating Kubernetes resources.")
         for resource in resources:
+            logger.debug(
+                "Creating resource %s (%s)", resource["metadata"]["name"], resource["kind"]
+            )
             utils.create_from_dict(k8s_api, resource)
 
     def render_resource_definitions(self) -> List[Dict]:
@@ -241,6 +252,7 @@ class CephCsiCharm(CharmBase):
     @needs_leader
     def update_storage_classes(self) -> None:
         """Re-render templates and update StorageClass resources in k8s cluster."""
+        logger.info("Updating StorageClass definitions in Kubernetes.")
         for resource in self.resources:
             if isinstance(resource, StorageClass):
                 resource.remove()
@@ -264,7 +276,7 @@ class CephCsiCharm(CharmBase):
             logger.warning(
                 "Ceph relation with %s is missing data: %s", event.unit.name, missing_data
             )
-            self.unit.status = BlockedStatus("Ceph relation is missing data.")
+            self.unit.status = WaitingStatus("Ceph relation is missing data.")
             return
 
         all_resources = self.render_all_resource_definitions()
@@ -275,18 +287,14 @@ class CephCsiCharm(CharmBase):
     @needs_leader
     def purge_k8s_resources(self, _: RelationDepartedEvent) -> None:
         """Purge k8s resources created by this charm."""
+        logger.info("Removing Kubernetes resources.")
         for resource in self.resources:
             try:
-                logger.debug(
-                    "Removing resource %s (namespace=%s)",
-                    resource.name,
-                    (resource.namespace or None),
-                )
                 resource.remove()
             except ApiException as exc:
                 if exc.status != 404:
                     raise exc
-                logger.info("Resource %s is already removed.", resource.name)
+                logger.debug("Resource %s is already removed.", resource.name)
 
         self._stored.resources_created = False
         self.unit.status = BlockedStatus("Missing relations: ceph")
@@ -294,6 +302,10 @@ class CephCsiCharm(CharmBase):
     def _on_config_changed(self, _: ConfigChangedEvent) -> None:
         """Handle configuration Change."""
         if self.update_stored_state("default-storage", "default_storage_class"):
+            logger.info(
+                "Config changed. New value: 'default-storage' = '%s'",
+                self.config.get("default-storage"),
+            )
             self.update_storage_classes()
 
 
