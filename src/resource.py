@@ -43,6 +43,16 @@ class Resource:
         self.name = name
         self.namespace = namespace
 
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Resource):
+            return NotImplemented
+
+        return (
+            other.__class__ == self.__class__
+            and other.name == self.name
+            and other.namespace == self.namespace
+        )
+
     @property
     def _remove_action(self) -> Callable:
         """Return method of k8s api client that removes cluster resource."""

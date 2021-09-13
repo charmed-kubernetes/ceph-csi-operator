@@ -95,7 +95,7 @@ class CephCsiCharm(CharmBase):
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.ceph_relation_joined, self._on_ceph_joined)
         self.framework.observe(self.on.ceph_relation_broken, self.purge_k8s_resources)
-        self._stored.set_default(ceph_data=dict())
+        self._stored.set_default(ceph_data={})
         self._stored.set_default(resources_created=False)
         self._stored.set_default(default_storage_class=self.XFS_STORAGE)
 
@@ -260,7 +260,7 @@ class CephCsiCharm(CharmBase):
         self.create_ceph_resources(storage_classes)
 
     @needs_leader
-    def _on_ceph_joined(self, event: RelationJoinedEvent) -> None:
+    def _on_ceph_joined(self, event: RelationJoinedEvent) -> None:  # pragma: no cover
         """Create necessary k8s resources when relation is formed with ceph-mon."""
         if self._stored.resources_created:
             # Skip silently if other ceph_relation_joined event already
@@ -309,5 +309,5 @@ class CephCsiCharm(CharmBase):
             self.update_storage_classes()
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main(CephCsiCharm)
