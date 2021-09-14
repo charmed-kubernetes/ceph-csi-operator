@@ -116,7 +116,7 @@ class TestCharm(unittest.TestCase):
         mock_relation_check = self.patch(CephCsiCharm, "check_required_relations")
         self.harness.charm.on.install.emit()
 
-        mock_relation_check.assert_called_once()
+        mock_relation_check.assert_called_once_with()
 
     def test_required_relation_check(self):
         """Test that check_required_relations sets expected unit states."""
@@ -199,8 +199,8 @@ class TestCharm(unittest.TestCase):
 
         self.harness.charm.render_all_resource_definitions()
 
-        resource_definitions.assert_called_once()
-        storage_definitions.assert_called_once()
+        resource_definitions.assert_called_once_with()
+        storage_definitions.assert_called_once_with()
 
     def test_update_storage_class(self):
         """Test that update_storage_classes() removes old resources and re-adds new resources."""
@@ -213,7 +213,7 @@ class TestCharm(unittest.TestCase):
 
         self.harness.charm.update_storage_classes()
 
-        remove_storage_mock.assert_called()
+        remove_storage_mock.assert_called_with()
         create_resources_mock.assert_called_with(resources)
 
         # Test that nothing is executed on non-leader units
@@ -244,7 +244,7 @@ class TestCharm(unittest.TestCase):
         self.harness.charm.purge_k8s_resources(MagicMock())
 
         for remove_call in remove_call_mocks:
-            remove_call.assert_called_once()
+            remove_call.assert_called_once_with()
 
         self.assertEqual(self.harness.charm.unit.status.name, "blocked")
         self.assertEqual(self.harness.charm.unit.status.message, "Missing relations: ceph")
