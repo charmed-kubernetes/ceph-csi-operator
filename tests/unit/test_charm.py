@@ -54,16 +54,6 @@ class TestCharm(unittest.TestCase):
         self.addCleanup(_patch.stop)
         return mock_method
 
-    # def join_ceph_mon(self, relation_data: Optional[Dict] = None) -> int:
-    #     """Helper method that adds ceph-mon relation."""
-    #     if relation_data is None:
-    #         relation_data = {"fsid": "1", "key": "secret", "mon_hosts": "10.0.0.1"}
-    #     rel_id = self.harness.add_relation('ceph', 'ceph-mon')
-    #     self.harness.add_relation_unit(rel_id, "ceph-mon/0")
-    #     self.harness.update_relation_data(rel_id, 'ceph-mon/0', relation_data)
-    #
-    #     return rel_id
-
     def test_stored_dict_copy(self):
         """Test helper method that returns StoredDict as dictionary copy."""
         self.harness.charm._stored.ceph_data["foo"] = "bar"
@@ -286,25 +276,3 @@ class TestCharm(unittest.TestCase):
             self.harness.charm.purge_k8s_resources(MagicMock())
 
         self.assertEqual(raised.exception, expected_exception)
-
-    def test_ceph_join(self):
-        """Test procedure for ceph-mon joined relation."""
-        # This test is skipped because charm needs to implement logical flow
-        # add_relation -> add_unit_to_relation -> update_relation_data
-        # Currently it expects tht at least one unit has all the needed data at the time
-        # of RelationJoined event which is flow that's not supported by Operator testing
-        # framework.
-
-        # resources = [
-        #     {"kind": "Foo", "metadata": {"name": "resource1"}},
-        #     {"kind": "Bar", "metadata": {"name": "resource2"}},
-        # ]
-        # render_resources_mock = self.patch(CephCsiCharm, 'render_all_resource_definitions')
-        # render_resources_mock.return_value = resources
-        # create_resources_mock = self.patch(CephCsiCharm, 'create_ceph_resources')
-        #
-        # self.harness.set_leader(True)
-        # self.join_ceph_mon()
-        #
-        # render_resources_mock.assert_called_once()
-        # create_resources_mock.assert_called_once_with(resources)

@@ -47,7 +47,7 @@ Create and activate a virtualenv with the development requirements:
 ## Testing
 
 The Python operator framework includes a very nice harness for testing
-operator behaviour without full deployment. Just `unit` tox target:
+operator behaviour without full deployment. To execute unit tests, run:
 
     $ tox -e unit
 
