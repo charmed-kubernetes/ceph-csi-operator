@@ -26,6 +26,7 @@ jobs:
     - name: Install dependencies
       run: python -m pip install tox 
     - name: Run linters
+      if: ${{ matrix.python-version >= 3.6 }}  # `black` formatter is supported only on python 3.6+
       run: tox -e lint
     - name: Run unit tests
       run: tox -e unit
