@@ -6,5 +6,5 @@
 options:
   default-storage:
     default: ceph-xfs
-    description: Default storage class to use. Allowed values: "ceph-ext4", "ceph-xfs"
+    description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs'"
     type: string
