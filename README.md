@@ -47,9 +47,9 @@ Create and activate a virtualenv with the development requirements:
 ## Testing
 
 The Python operator framework includes a very nice harness for testing
-operator behaviour without full deployment. Just `run_tests`:
+operator behaviour without full deployment. To execute unit tests, run:
 
-    ./run_tests
+    $ tox -e unit
 
 [1]: https://charmhub.io/containers-kubernetes-master
 [2]: https://charmhub.io/charmed-kubernetes
