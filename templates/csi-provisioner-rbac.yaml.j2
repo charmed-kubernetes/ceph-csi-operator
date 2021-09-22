@@ -9,25 +9,13 @@ kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: rbd-external-provisioner-runner
-aggregationRule:
-  clusterRoleSelectors:
-    - matchLabels:
-        rbac.rbd.csi.ceph.com/aggregate-to-rbd-external-provisioner-runner: "true"
-rules: []
----
-kind: ClusterRole
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: rbd-external-provisioner-runner-rules
-  labels:
-    rbac.rbd.csi.ceph.com/aggregate-to-rbd-external-provisioner-runner: "true"
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["list", "watch", "create", "update", "patch"]
@@ -37,34 +25,36 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["update", "patch"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
-    verbs: ["get", "list", "watch", "update"]
+    verbs: ["get", "list"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotcontents"]
     verbs: ["create", "get", "list", "watch", "update", "delete"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotclasses"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["apiextensions.k8s.io"]
-    resources: ["customresourcedefinitions"]
-    verbs: ["create", "list", "watch", "delete", "get", "update"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  - apiGroups: ["storage.k8s.io"]
     resources: ["csinodes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
-    resources: ["volumesnapshots/status"]
+    resources: ["volumesnapshotcontents/status"]
     verbs: ["update"]
   - apiGroups: [""]
-    resources: ["persistentvolumeclaims/status"]
-    verbs: ["update", "patch"]
-
+    resources: ["configmaps"]
+    verbs: ["get"]
 ---
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
@@ -89,7 +79,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "watch", "list", "delete", "update", "create"]

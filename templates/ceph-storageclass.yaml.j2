@@ -20,5 +20,6 @@ parameters:
   csi.storage.k8s.io/provisioner-secret-namespace: default
   imageFeatures: layering
   pool: '{{ pool_name }}'
+  thickProvision: 'false'
 provisioner: rbd.csi.ceph.com
 reclaimPolicy: Delete
