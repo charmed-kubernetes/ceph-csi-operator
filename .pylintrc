@@ -1,0 +1,2 @@
+[MESSAGES CONTROL]
+	disable=C0209  # Don't recommend f-strings due to backward compatibility

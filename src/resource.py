@@ -57,7 +57,7 @@ class Resource:
     def _remove_action(self) -> Callable:
         """Return method of k8s api client that removes cluster resource."""
         raise MissingMethod(
-            "Removal of {} {} is not " "implemented".format(self.__class__.__name__, self.name)
+            "Removal of {} {} is not implemented".format(self.__class__.__name__, self.name)
         )
 
     @property
