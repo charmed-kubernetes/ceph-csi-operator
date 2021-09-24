@@ -34,7 +34,12 @@ Once the deployment settled, We can add `ceph-csi`
     $ juju add-relation ceph-csi ceph-mon
     
 
+## Warning: Removal
 
+When `ceph-csi` charm is removed, it will not clean up Ceph pools that were
+created when relation with `ceph-mon:client` was joined. Interface of
+`ceph-mon:client` does not seem to offer a "removal" functionality. If you
+wish to remove ceph pools, use `delete-pool` action of `ceph-mon unit`.
 
 ## Developing
 

@@ -32,6 +32,7 @@ from resource import (
 from typing import Any, Callable, Dict, List
 
 import yaml
+from charms.ceph_csi.v0.ceph_client import CephRequest, CreatePoolConfig
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
@@ -69,11 +70,13 @@ def needs_leader(func: Callable) -> Callable:
 class CephCsiCharm(CharmBase):
     """Charm the service."""
 
-    CEPH_RELATION = "ceph"
+    CEPH_ADMIN_RELATION = "ceph-admin"
+    CEPH_CLIENT_RELATION = "ceph-client"
     K8S_NS = "default"
 
     XFS_STORAGE = "ceph-xfs"
     EXT4_STORAGE = "ceph-ext4"
+    REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
 
     RESOURCE_TEMPLATES = [
         "ceph-csi-encryption-kms-config.yaml.j2",
@@ -93,8 +96,10 @@ class CephCsiCharm(CharmBase):
         super().__init__(*args)
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
-        self.framework.observe(self.on.ceph_relation_joined, self._on_ceph_joined)
-        self.framework.observe(self.on.ceph_relation_broken, self.purge_k8s_resources)
+        self.framework.observe(self.on.ceph_admin_relation_joined, self._on_ceph_admin_joined)
+        self.framework.observe(self.on.ceph_admin_relation_broken, self.purge_k8s_resources)
+        self.framework.observe(self.on.ceph_client_relation_joined, self._on_ceph_client_joined)
+        self.framework.observe(self.on.ceph_client_relation_broken, self._on_ceph_client_removed)
         self._stored.set_default(ceph_data={})
         self._stored.set_default(resources_created=False)
         self._stored.set_default(default_storage_class=self.XFS_STORAGE)
@@ -187,8 +192,16 @@ class CephCsiCharm(CharmBase):
 
     def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
-        if self.model.get_relation(self.CEPH_RELATION) is None:
-            self.unit.status = BlockedStatus("Missing relations: ceph")
+        missing_relations = []
+        if self.model.get_relation(self.CEPH_ADMIN_RELATION) is None:
+            missing_relations.append("ceph-admin")
+        if self.model.get_relation(self.CEPH_CLIENT_RELATION) is None:
+            missing_relations.append("ceph-client")
+
+        if missing_relations:
+            self.unit.status = BlockedStatus(
+                "Missing relations: {}".format(", ".join(missing_relations))
+            )
         else:
             self.unit.status = ActiveStatus("Unit is ready")
 
@@ -259,18 +272,28 @@ class CephCsiCharm(CharmBase):
         storage_classes = self.render_storage_definitions()
         self.create_ceph_resources(storage_classes)
 
-    @needs_leader
-    def _on_ceph_joined(self, event: RelationJoinedEvent) -> None:  # pragma: no cover
+    def _on_ceph_admin_joined(self, event: RelationJoinedEvent) -> None:  # pragma: no cover
         """Create necessary k8s resources when relation is formed with ceph-mon."""
+        if not self.unit.is_leader():
+            # Skip resource creation on non-leader unit
+            logger.info("Skipping Kubernetes resource creation from non-leader unit")
+            self.check_required_relations()
+
         if self._stored.resources_created:
             # Skip silently if other ceph_relation_joined event already
             # created resources
             return
 
         unit_data = event.relation.data[event.unit]
-        expected_data = ("fsid", "key", "mon_hosts")
-        for key in expected_data:
-            self._stored.ceph_data[key] = unit_data.get(key)
+        expected_data = (
+            ("fsid", "fsid"),
+            ("key", "kubernetes_key"),
+            ("mon_hosts", "mon_hosts"),
+        )  # mapping between relation data and template context keys.
+
+        for relation_data_key, ceph_context_key in expected_data:
+            self._stored.ceph_data[ceph_context_key] = unit_data.get(relation_data_key)
+
         missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
         if missing_data:
             logger.warning(
@@ -283,6 +306,34 @@ class CephCsiCharm(CharmBase):
         self.create_ceph_resources(all_resources)
         self._stored.resources_created = True
         self.check_required_relations()
+
+    def _on_ceph_client_joined(self, event: RelationJoinedEvent) -> None:
+        """Use ceph-mon:client relation to request creation of ceph-pools."""
+        if not self.unit.is_leader():
+            # Don't request ceph pool creation from non-leader units
+            logger.info("Skipping Ceph pool creation requests from non-leader unit")
+            self.check_required_relations()
+            return
+
+        request = CephRequest(self.unit, event.relation)
+        for pool_name in self.REQUIRED_CEPH_POOLS:
+            pool = CreatePoolConfig(pool_name)
+            request.add_replicated_pool(pool)
+
+        request.execute()
+
+    def _on_ceph_client_removed(self, _: RelationDepartedEvent) -> None:
+        """Warn that ceph pools wont be automatically removed on ceph-mon:client departure.
+
+        There does not seem to be a functionality to request ceph pool removal from ceph broker in
+        a same way that there's a functionality to add one.
+        """
+        ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
+        logger.warning(
+            "Ceph pools %s wont be removed. If you want to clean up pools manually, use juju "
+            "action 'delete-pool' on 'ceph-mon' units",
+            ceph_pools,
+        )
 
     @needs_leader
     def purge_k8s_resources(self, _: RelationDepartedEvent) -> None:
