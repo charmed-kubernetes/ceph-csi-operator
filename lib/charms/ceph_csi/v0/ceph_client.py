@@ -40,7 +40,7 @@ class CommonPoolConfig:  # pylint: disable=R0902,R0903
     enumerating long list of common attributes.
     """
 
-    OP: str = ""  # Operation name must be overriden in child classes.
+    OP = ""  # Operation name must be overriden in child classes.
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize Common config pool.
@@ -99,28 +99,28 @@ class CommonPoolConfig:  # pylint: disable=R0902,R0903
         :type weight: Optional[float]
 
         """
-        self.app_name: Optional[str] = None
-        self.group: Optional[str] = None
-        self.max_bytes: Optional[int] = None
-        self.max_objects: Optional[int] = None
-        self.group_namespace: Optional[str] = None
-        self.rbd_mirroring_mode: str = "pool"
-        self.weight: Optional[float] = None
-        self.compression_algorithm: Optional[str] = None
-        self.compression_mode: Optional[str] = None
-        self.compression_required_ratio: Optional[float] = None
-        self.compression_min_blob_size: Optional[int] = None
-        self.compression_min_blob_size_hdd: Optional[int] = None
-        self.compression_min_blob_size_ssd: Optional[int] = None
-        self.compression_max_blob_size: Optional[int] = None
-        self.compression_max_blob_size_hdd: Optional[int] = None
-        self.compression_max_blob_size_ssd: Optional[int] = None
+        self.app_name = None
+        self.group = None
+        self.max_bytes = None
+        self.max_objects = None
+        self.group_namespace = None
+        self.rbd_mirroring_mode = "pool"
+        self.weight = None
+        self.compression_algorithm = None
+        self.compression_mode = None
+        self.compression_required_ratio = None
+        self.compression_min_blob_size = None
+        self.compression_min_blob_size_hdd = None
+        self.compression_min_blob_size_ssd = None
+        self.compression_max_blob_size = None
+        self.compression_max_blob_size_hdd = None
+        self.compression_max_blob_size_ssd = None
 
         for key, value in kwargs.items():
             _ = self.__getattribute__(key)  # Ensure that key is valid attribute
             self.__setattr__(key, value)
 
-    def to_json(self) -> Dict[str, str]:
+    def to_json(self) -> Dict[str, Any]:
         """Serialize config data into json (dict)."""
         output = {"op": self.OP}
         for attribute, value in vars(self).items():
@@ -151,7 +151,7 @@ class CreatePoolConfig(CommonPoolConfig):  # pylint: disable=R0903
         self.pg_num = pg_num
         super().__init__(**kwargs)
 
-    def to_json(self) -> Dict[str, str]:
+    def to_json(self) -> Dict[str, Any]:
         output = super().to_json()
         # parameter pg_num needs to be renamed since, unlike every other, it's expected with
         # underscore, not dash
@@ -181,19 +181,19 @@ class CephRequest:
         self.relation = client_relation
         self.api_version = api_version
         self.uuid = id_ or str(uuid4())
-        self._ops: List[Dict] = []
+        self._ops = []
 
     @property
-    def ops(self) -> List[Dict]:
+    def ops(self) -> List[Dict[str, Any]]:
         """List of operations contained in this request."""
         return self._ops
 
     @property
-    def request(self) -> Dict:
+    def request(self) -> Dict[str, Any]:
         """Return whole request serialized as a dict."""
         return {"api-version": self.api_version, "request-id": self.uuid, "ops": self.ops}
 
-    def add_op(self, op_data: Dict) -> None:
+    def add_op(self, op_data: Dict[str, Any]) -> None:
         """Add new operation to the request.
 
         Operations are de-duplicated and no action is done if same operation is already part this
