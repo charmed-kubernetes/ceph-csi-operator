@@ -192,11 +192,12 @@ class CephCsiCharm(CharmBase):
 
     def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
-        missing_relations = []
-        if self.model.get_relation(self.CEPH_ADMIN_RELATION) is None:
-            missing_relations.append("ceph-admin")
-        if self.model.get_relation(self.CEPH_CLIENT_RELATION) is None:
-            missing_relations.append("ceph-client")
+        required_relations = [self.CEPH_ADMIN_RELATION, self.CEPH_CLIENT_RELATION]
+        missing_relations = [
+            relation
+            for relation in required_relations
+            if self.model.get_relation(relation) is None
+        ]
 
         if missing_relations:
             self.unit.status = BlockedStatus(
@@ -274,10 +275,11 @@ class CephCsiCharm(CharmBase):
 
     def _on_ceph_admin_joined(self, event: RelationJoinedEvent) -> None:  # pragma: no cover
         """Create necessary k8s resources when relation is formed with ceph-mon."""
+        self.check_required_relations()
         if not self.unit.is_leader():
             # Skip resource creation on non-leader unit
             logger.info("Skipping Kubernetes resource creation from non-leader unit")
-            self.check_required_relations()
+            return
 
         if self._stored.resources_created:
             # Skip silently if other ceph_relation_joined event already
@@ -285,13 +287,13 @@ class CephCsiCharm(CharmBase):
             return
 
         unit_data = event.relation.data[event.unit]
-        expected_data = (
+        expected_data_map = (
             ("fsid", "fsid"),
             ("key", "kubernetes_key"),
             ("mon_hosts", "mon_hosts"),
         )  # mapping between relation data and template context keys.
 
-        for relation_data_key, ceph_context_key in expected_data:
+        for relation_data_key, ceph_context_key in expected_data_map:
             self._stored.ceph_data[ceph_context_key] = unit_data.get(relation_data_key)
 
         missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
@@ -305,14 +307,13 @@ class CephCsiCharm(CharmBase):
         all_resources = self.render_all_resource_definitions()
         self.create_ceph_resources(all_resources)
         self._stored.resources_created = True
-        self.check_required_relations()
 
     def _on_ceph_client_joined(self, event: RelationJoinedEvent) -> None:
         """Use ceph-mon:client relation to request creation of ceph-pools."""
+        self.check_required_relations()
         if not self.unit.is_leader():
             # Don't request ceph pool creation from non-leader units
             logger.info("Skipping Ceph pool creation requests from non-leader unit")
-            self.check_required_relations()
             return
 
         request = CephRequest(self.unit, event.relation)

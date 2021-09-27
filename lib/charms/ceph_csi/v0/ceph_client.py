@@ -126,10 +126,8 @@ class CommonPoolConfig:  # pylint: disable=R0902,R0903
 
     def to_json(self) -> Dict[str, Any]:
         """Serialize config data into json (dict)."""
-        output = {"op": self.OP}
-        for attribute, value in vars(self).items():
-            json_key = attribute.replace("_", "-")
-            output[json_key] = value
+        output = {attribute.replace("_", "-"): value for attribute, value in vars(self).items()}
+        output["op"] = self.OP
 
         return output
 
@@ -225,6 +223,7 @@ class CephRequest:
             raise RequestError(
                 "Can not execute request without specifying operations ({})".format(self.uuid)
             )
+
         serialized_request = json.dumps(self.request)
         logger.info("Sending request %s to Ceph broker.", self.uuid)
         logger.debug("Request %s details: %s", self.uuid, serialized_request)
