@@ -13,6 +13,7 @@ Example:
     request.execute()
 """
 import json
+import logging
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -27,6 +28,9 @@ LIBAPI = 0
 # Increment this PATCH version before using `charmcraft publish-lib` or reset
 # to 0 if you are raising the major API version
 LIBPATCH = 1
+
+
+logger = logging.getLogger(__name__)
 
 
 class RequestError(Exception):
@@ -202,7 +206,14 @@ class CephRequest:
         :param op_data: Operation that will be requested from the ceph broker, serialized as dict.
         """
         if op_data not in self.ops:
+            logger.debug("Ceph broker request (%s): Adding OP: %s", self.uuid, op_data)
             self.ops.append(op_data)
+        else:
+            logger.debug(
+                "Ceph broker request (%s): Similar OP already exists in the request: %s",
+                self.uuid,
+                op_data,
+            )
 
     def execute(self) -> None:
         """Send request to ceph-broker.
@@ -214,7 +225,10 @@ class CephRequest:
             raise RequestError(
                 "Can not execute request without specifying operations ({})".format(self.uuid)
             )
-        self.relation.data[self.unit]["broker_req"] = json.dumps(self.request)
+        serialized_request = json.dumps(self.request)
+        logger.info("Sending request %s to Ceph broker.", self.uuid)
+        logger.debug("Request %s details: %s", self.uuid, serialized_request)
+        self.relation.data[self.unit]["broker_req"] = serialized_request
 
     def add_replicated_pool(self, config: CreatePoolConfig) -> None:
         """Add operation that creates new replicated ceph pool to this request.
