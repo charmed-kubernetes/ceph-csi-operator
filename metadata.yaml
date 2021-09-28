@@ -12,8 +12,10 @@ series:
   - bionic
   - xenial
 requires:
-  ceph:
+  ceph-admin:
     interface: ceph-admin
+  ceph-client:
+    interface: ceph-client
   kubernetes:
     interface: juju-info
     scope: container

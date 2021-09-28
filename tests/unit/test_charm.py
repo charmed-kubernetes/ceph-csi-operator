@@ -4,6 +4,7 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Collection of tests related to src/charm.py"""
 
+import json
 import unittest
 from resource import (
     ClusterRole,
@@ -24,7 +25,7 @@ from unittest.mock import MagicMock, PropertyMock, call, patch
 from kubernetes.client import ApiException
 from ops.testing import Harness
 
-from charm import CephCsiCharm, client, config, logger, utils
+from charm import CephCsiCharm, CreatePoolConfig, client, config, logger, utils
 
 
 class TestCharm(unittest.TestCase):
@@ -123,19 +124,39 @@ class TestCharm(unittest.TestCase):
         self.patch_property(CephCsiCharm, "model")
         get_relation_mock = self.patch(CephCsiCharm.model, "get_relation")
 
-        # Return object indicating existing relation
+        # Return object on any call, indicating existing relations
         get_relation_mock.return_value = object()
         self.harness.charm.check_required_relations()
 
         self.assertEqual(self.harness.charm.unit.status.name, "active")
         self.assertEqual(self.harness.charm.unit.status.message, "Unit is ready")
 
-        # Return None indicating missing ceph relation
+        # Return None on any call, indicating that all required relations are  missing
         get_relation_mock.return_value = None
         self.harness.charm.check_required_relations()
 
         self.assertEqual(self.harness.charm.unit.status.name, "blocked")
-        self.assertEqual(self.harness.charm.unit.status.message, "Missing relations: ceph")
+        self.assertEqual(
+            self.harness.charm.unit.status.message, "Missing relations: ceph-admin, ceph-client"
+        )
+
+        # Return None when requesting ceph-admin relation
+        get_relation_mock.side_effect = (
+            lambda rel: None if rel == CephCsiCharm.CEPH_ADMIN_RELATION else ""
+        )
+        self.harness.charm.check_required_relations()
+
+        self.assertEqual(self.harness.charm.unit.status.name, "blocked")
+        self.assertEqual(self.harness.charm.unit.status.message, "Missing relations: ceph-admin")
+
+        # Return None when requesting ceph-client relation
+        get_relation_mock.side_effect = (
+            lambda rel: None if rel == CephCsiCharm.CEPH_CLIENT_RELATION else ""
+        )
+        self.harness.charm.check_required_relations()
+
+        self.assertEqual(self.harness.charm.unit.status.name, "blocked")
+        self.assertEqual(self.harness.charm.unit.status.message, "Missing relations: ceph-client")
 
     def test_create_ceph_resources(self):
         """Test that create_ceph_resources() calls kubernetes api."""
@@ -276,3 +297,68 @@ class TestCharm(unittest.TestCase):
             self.harness.charm.purge_k8s_resources(MagicMock())
 
         self.assertEqual(raised.exception, expected_exception)
+
+    def test_ceph_client_joined_leader(self):
+        """Test that ceph pool creation is requested when ceph-client relation is joined.
+
+        Note: Only leader unit is expected to make this request.
+        """
+        expected_ops = [
+            CreatePoolConfig(pool).to_json() for pool in CephCsiCharm.REQUIRED_CEPH_POOLS
+        ]
+
+        # Setup charm
+        harness = Harness(CephCsiCharm)
+        harness.set_leader(True)
+        harness.begin()
+
+        # add ceph-client relation
+        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        harness.add_relation_unit(relation_id, "ceph-mon/0")
+
+        # parse data out of the relation
+        relation_data = harness.get_relation_data(relation_id, harness.charm.unit.name)
+        raw_broker_request = relation_data.get("broker_req", "{}")
+        broker_request = json.loads(raw_broker_request)
+
+        # Assert that requested operation matches expected ops
+        self.assertEqual(broker_request.get("ops"), expected_ops)
+
+        # Assert that request contains expected header
+        self.assertIn("api-version", broker_request)
+        self.assertIn("request-id", broker_request)
+
+    def test_ceph_client_joined_non_leader(self):
+        """Test that no action is performed on non-leader units when ceph-client rel. is joined."""
+        logger_mock = self.patch(logger, "info")
+        expected_log_msg = "Skipping Ceph pool creation requests from non-leader unit"
+
+        # Setup charm
+        harness = Harness(CephCsiCharm)
+        harness.set_leader(False)
+        harness.begin()
+
+        # add ceph-client relation
+        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        harness.add_relation_unit(relation_id, "ceph-mon/0")
+
+        relation_data = harness.get_relation_data(relation_id, harness.charm.unit.name)
+        broker_request = relation_data.get("broker_req", None)
+
+        self.assertIsNone(broker_request)
+        logger_mock.assert_called_once_with(expected_log_msg)
+
+    def test_ceph_client_relation_departed(self):
+        """Test that warning is logged about ceph-pools not being cleaned up after rel. removal."""
+        logger_mock = self.patch(logger, "warning")
+        pools = ", ".join(CephCsiCharm.REQUIRED_CEPH_POOLS)
+        expected_msg = (
+            "Ceph pools %s wont be removed. If you want to clean up pools manually, "
+            "use juju action 'delete-pool' on 'ceph-mon' units"
+        )
+
+        # Operator testing harness does not provide a helper to "remove relation" so for now we'll
+        # invoke method manually
+        self.harness.charm._on_ceph_client_removed(MagicMock())
+
+        logger_mock.assert_called_with(expected_msg, pools)
