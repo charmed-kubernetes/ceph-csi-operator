@@ -55,11 +55,6 @@ class TestCommonPoolConfig(unittest.TestCase):
         for key, value in args.items():
             self.assertEqual(config.__getattribute__(key), value)
 
-    def test_raise_on_unknown_attribute(self):
-        """Test that AttributeError is raised if unexpected attribute is passed to the __init__."""
-        with self.assertRaises(AttributeError):
-            _ = CommonPoolConfig(foo="bar")
-
     def test_to_json_serialization(self):
         """Test that to_json() serialization returns expected dictionary.
 

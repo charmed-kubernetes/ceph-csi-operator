@@ -37,7 +37,7 @@ class RequestError(Exception):
     """Exception that occur when sending requests to Ceph broker."""
 
 
-class CommonPoolConfig:  # pylint: disable=R0902,R0903
+class CommonPoolConfig:  # pylint: disable=R0902,R0903,R0913,R0914
     """Class that encapsulate config options that are common to requests related to ceph pools.
 
     More specific configs, like CreatePoolConfig can inherit from this class so they can avoid
@@ -46,7 +46,25 @@ class CommonPoolConfig:  # pylint: disable=R0902,R0903
 
     OP = ""  # Operation name must be overriden in child classes.
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        app_name: Optional[str] = None,
+        group: Optional[str] = None,
+        max_bytes: Optional[int] = None,
+        max_objects: Optional[int] = None,
+        group_namespace: Optional[str] = None,
+        rbd_mirroring_mode: str = "pool",
+        weight: Optional[float] = None,
+        compression_algorithm: Optional[str] = None,
+        compression_mode: Optional[str] = None,
+        compression_required_ratio: Optional[float] = None,
+        compression_min_blob_size: Optional[int] = None,
+        compression_min_blob_size_hdd: Optional[int] = None,
+        compression_min_blob_size_ssd: Optional[int] = None,
+        compression_max_blob_size: Optional[int] = None,
+        compression_max_blob_size_hdd: Optional[int] = None,
+        compression_max_blob_size_ssd: Optional[int] = None,
+    ) -> None:
         """Initialize Common config pool.
 
         This method takes following attributes as parameters:
@@ -54,75 +72,54 @@ class CommonPoolConfig:  # pylint: disable=R0902,R0903
         :param app_name: Tag pool with application name. Note that there is certain protocols
                          emerging upstream with regard to meaningful application names to use.
                          Examples are 'rbd' and 'rgw'.
-        :type app_name: Optional[str]
         :param compression_algorithm: Compressor to use, one of: ('lz4', 'snappy', 'zlib', 'zstd')
-        :type compression_algorithm: Optional[str]
         :param compression_mode: When to compress data, one of: ('none', 'passive', 'aggressive',
                                  'force')
-        :type compression_mode: Optional[str]
         :param compression_required_ratio: Minimum compression ratio for data chunk, if the
                                            requested ratio is not achieved the compressed version
                                            will be thrown away and the original stored.
-        :type compression_required_ratio: Optional[float]
         :param compression_min_blob_size: Chunks smaller than this are never compressed
                                           (unit: bytes).
-        :type compression_min_blob_size: Optional[int]
         :param compression_min_blob_size_hdd: Chunks smaller than this are not compressed when
                                               destined to rotational media (unit: bytes).
-        :type compression_min_blob_size_hdd: Optional[int]
         :param compression_min_blob_size_ssd: Chunks smaller than this are not compressed when
                                               destined to flash media (unit: bytes).
-        :type compression_min_blob_size_ssd: Optional[int]
         :param compression_max_blob_size: Chunks larger than this are broken into
                                           N * compression_max_blob_size chunks before being
                                           compressed (unit: bytes).
-        :type compression_max_blob_size: Optional[int]
         :param compression_max_blob_size_hdd: Chunks larger than this are broken into
                                               N * compression_max_blob_size_hdd chunks before
                                               being compressed when destined for rotational media
                                               (unit: bytes)
-        :type compression_max_blob_size_hdd: Optional[int]
         :param compression_max_blob_size_ssd: Chunks larger than this are broken into
                                               N * compression_max_blob_size_ssd chunks before
                                               being compressed when destined for flash media
                                               (unit: bytes).
-        :type compression_max_blob_size_ssd: Optional[int]
         :param group: Group to add pool to
-        :type group: Optional[str]
         :param max_bytes: Maximum bytes quota to apply
-        :type max_bytes: Optional[int]
         :param max_objects: Maximum objects quota to apply
-        :type max_objects: Optional[int]
         :param group_namespace: Group namespace
-        :type group_namespace: Optional[str]
         :param rbd_mirroring_mode: Pool mirroring mode used when Ceph RBD mirroring is enabled.
-        :type rbd_mirroring_mode: Optional[str]
         :param weight: The percentage of data that is expected to be contained in the pool from
                        the total available space on the OSDs. Used to calculate number of
                        Placement Groups to create for pool.
-        :type weight: Optional[float]
-
         """
-        self.app_name = None
-        self.group = None
-        self.max_bytes = None
-        self.max_objects = None
-        self.group_namespace = None
-        self.rbd_mirroring_mode = "pool"
-        self.weight = None
-        self.compression_algorithm = None
-        self.compression_mode = None
-        self.compression_required_ratio = None
-        self.compression_min_blob_size = None
-        self.compression_min_blob_size_hdd = None
-        self.compression_min_blob_size_ssd = None
-        self.compression_max_blob_size = None
-        self.compression_max_blob_size_hdd = None
-        self.compression_max_blob_size_ssd = None
-
-        for key, value in kwargs.items():
-            _ = self.__getattribute__(key)  # Ensure that key is valid attribute
-            self.__setattr__(key, value)
+        self.app_name = app_name
+        self.group = group
+        self.max_bytes = max_bytes
+        self.max_objects = max_objects
+        self.group_namespace = group_namespace
+        self.rbd_mirroring_mode = rbd_mirroring_mode
+        self.weight = weight
+        self.compression_algorithm = compression_algorithm
+        self.compression_mode = compression_mode
+        self.compression_required_ratio = compression_required_ratio
+        self.compression_min_blob_size = compression_min_blob_size
+        self.compression_min_blob_size_hdd = compression_min_blob_size_hdd
+        self.compression_min_blob_size_ssd = compression_min_blob_size_ssd
+        self.compression_max_blob_size = compression_max_blob_size
+        self.compression_max_blob_size_hdd = compression_max_blob_size_hdd
+        self.compression_max_blob_size_ssd = compression_max_blob_size_ssd
 
     def to_json(self) -> Dict[str, Any]:
         """Serialize config data into json (dict)."""
