@@ -2,6 +2,7 @@
 max-line-length = 99
 ignore = W503
 select: E,W,F,C,N
+per-file-ignores = __init__.py:F401
 exclude:
   venv
   .git

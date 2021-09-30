@@ -1,0 +1,18 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: read-test-{{ storage_class }}
+spec:
+  volumes:
+  - name: shared-data
+    persistentVolumeClaim:
+      claimName: pvc-test-{{ storage_class }}
+      readOnly: false
+  containers:
+    - name: read-test-{{ storage_class }}
+      image: public.ecr.aws/ubuntu/ubuntu:latest
+      command: ["/bin/bash", "-c", "cat /data/juju"]
+      volumeMounts:
+      - name: shared-data
+        mountPath: /data
+  restartPolicy: Never

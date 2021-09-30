@@ -13,6 +13,7 @@ develop a new k8s charm using the Operator Framework:
 """
 
 import itertools
+import json
 import logging
 from functools import wraps
 from resource import (
@@ -117,6 +118,16 @@ class CephCsiCharm(CharmBase):
         :return: copy of stored_dict
         """
         return dict(stored_dict.items())
+
+    @property
+    def ceph_context(self) -> Dict[str, str]:
+        """Return context that can be used to render ceph resource files in templates/ folder."""
+        raw_mon_hosts = self._stored.ceph_data.get("mon_hosts", "").split()
+        return {
+            "fsid": self._stored.ceph_data.get("fsid"),
+            "kubernetes_key": self._stored.ceph_data.get("key"),
+            "mon_hosts": json.dumps(raw_mon_hosts),
+        }
 
     @property
     def resources(self) -> List[Resource]:
@@ -226,10 +237,10 @@ class CephCsiCharm(CharmBase):
     def render_resource_definitions(self) -> List[Dict]:
         """Render resource definitions from templates in self.RESOURCE_TEMPLATES."""
         env = Environment(loader=FileSystemLoader(self.template_dir))
+        context = self.ceph_context
 
         resources = [
-            env.get_template(template).render(self._stored.ceph_data)
-            for template in self.RESOURCE_TEMPLATES
+            env.get_template(template).render(context) for template in self.RESOURCE_TEMPLATES
         ]
 
         resource_dicts = [yaml.safe_load_all(res) for res in resources]
@@ -241,7 +252,7 @@ class CephCsiCharm(CharmBase):
         default_storage = self._stored.default_storage_class
         storage_classes = []
 
-        ext4_ctx = self.copy_stored_dict(self._stored.ceph_data)
+        ext4_ctx = self.ceph_context
         ext4_ctx["default"] = default_storage == self.EXT4_STORAGE
         ext4_ctx["pool_name"] = "ext4-pool"
         ext4_ctx["fs_type"] = "ext4"
@@ -249,7 +260,7 @@ class CephCsiCharm(CharmBase):
         resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(ext4_ctx)
         storage_classes.append(yaml.safe_load(resource))
 
-        xfs_ctx = self.copy_stored_dict(self._stored.ceph_data)
+        xfs_ctx = self.ceph_context
         xfs_ctx["default"] = default_storage == self.XFS_STORAGE
         xfs_ctx["pool_name"] = "xfs-pool"
         xfs_ctx["fs_type"] = "xfs"
@@ -287,14 +298,14 @@ class CephCsiCharm(CharmBase):
             return
 
         unit_data = event.relation.data[event.unit]
-        expected_data_map = (
-            ("fsid", "fsid"),
-            ("key", "kubernetes_key"),
-            ("mon_hosts", "mon_hosts"),
-        )  # mapping between relation data and template context keys.
+        expected_data = (
+            "fsid",
+            "key",
+            "mon_hosts",
+        )
 
-        for relation_data_key, ceph_context_key in expected_data_map:
-            self._stored.ceph_data[ceph_context_key] = unit_data.get(relation_data_key)
+        for relation_key in expected_data:
+            self._stored.ceph_data[relation_key] = unit_data.get(relation_key)
 
         missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
         if missing_data:
