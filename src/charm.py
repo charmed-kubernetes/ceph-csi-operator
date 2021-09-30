@@ -298,13 +298,13 @@ class CephCsiCharm(CharmBase):
             return
 
         unit_data = event.relation.data[event.unit]
-        expected_data = (
+        expected_relation_keys = (
             "fsid",
             "key",
             "mon_hosts",
         )
 
-        for relation_key in expected_data:
+        for relation_key in expected_relation_keys:
             self._stored.ceph_data[relation_key] = unit_data.get(relation_key)
 
         missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
