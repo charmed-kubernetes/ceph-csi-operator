@@ -63,6 +63,28 @@ class TestCharm(unittest.TestCase):
         dict_copy = self.harness.charm.copy_stored_dict(self.harness.charm._stored.ceph_data)
         self.assertEqual(dict_copy, expected_dict)
 
+    def test_ceph_context_getter(self):
+        """Test that ceph_context property returns properly formatted data."""
+        fsid = "12345"
+        key = "secret_key"
+        monitors = "10.0.0.1 10.0.0.2"
+        expected_monitors_format = json.dumps(monitors.split())
+
+        # data from ceph-mon:admin relation
+        relation_data = {"fsid": fsid, "key": key, "mon_hosts": monitors}
+
+        for id_, value in relation_data.items():
+            self.harness.charm._stored.ceph_data[id_] = value
+
+        # key and value format expected in context for Kubernetes templates.
+        expected_context = {
+            "fsid": fsid,
+            "kubernetes_key": key,
+            "mon_hosts": expected_monitors_format,
+        }
+
+        self.assertEqual(self.harness.charm.ceph_context, expected_context)
+
     def test_k8s_resources_getter(self):
         """Test that property 'resources' returns expected list of resources"""
         api_mock = MagicMock()

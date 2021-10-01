@@ -55,6 +55,22 @@ The Python operator framework includes a very nice harness for testing
 operator behaviour without full deployment. To execute unit tests, run:
 
     $ tox -e unit
+    
+This charm contains also functional tests which fully deploy `ceph-csi` charm 
+along with `kubernetes` and `ceph` cluster to test its functionality in a real
+environment. There are a few ways to run functional tests
+
+    $ tox -e func                          # Deploys new juju model and runs tests
+    $ tox -e func -- --model <model_name>  # Runs tests against existing model
+    $ tox -e func -- --keep-models         # Does not tear down model after tests are done (usefull for debuging failing tests )
+
+
+**__NOTE:__** If the environment which runs functional tests is behind a http
+proxy, you must export `TEST_HTTPS_PROXY` environment variable. Otherwise
+Kubernetes might have problem fetching docker images. Example:
+
+    $ export TEST_HTTPS_PROXY=http://10.0.0.1:3128
+    $ tox -e func
 
 [1]: https://charmhub.io/containers-kubernetes-master
 [2]: https://charmhub.io/charmed-kubernetes
