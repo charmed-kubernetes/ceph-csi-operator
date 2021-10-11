@@ -41,12 +41,13 @@ from ops.charm import (
     CharmBase,
     ConfigChangedEvent,
     InstallEvent,
+    RelationChangedEvent,
     RelationDepartedEvent,
     RelationJoinedEvent,
 )
 from ops.framework import StoredDict, StoredState
 from ops.main import main
-from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, Relation, Unit, WaitingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,13 @@ def needs_leader(func: Callable) -> Callable:
     @wraps(func)
     def leader_check(self: CharmBase, *args: Any, **kwargs: Any) -> Any:
         if self.unit.is_leader():
-            func(self, *args, **kwargs)
-        else:
-            logger.info(
-                "Execution of function '%s' skipped. This function can be executed only "
-                "by the leader unit.",
-                func.__name__,
-            )
+            return func(self, *args, **kwargs)
+        logger.info(
+            "Execution of function '%s' skipped. This function can be executed only by the leader"
+            " unit.",
+            func.__name__,
+        )
+        return None
 
     return leader_check
 
@@ -98,6 +99,7 @@ class CephCsiCharm(CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.ceph_admin_relation_joined, self._on_ceph_admin_joined)
+        self.framework.observe(self.on.ceph_admin_relation_changed, self._on_ceph_admin_changed)
         self.framework.observe(self.on.ceph_admin_relation_broken, self.purge_k8s_resources)
         self.framework.observe(self.on.ceph_client_relation_joined, self._on_ceph_client_joined)
         self.framework.observe(self.on.ceph_client_relation_broken, self._on_ceph_client_removed)
@@ -284,7 +286,39 @@ class CephCsiCharm(CharmBase):
         storage_classes = self.render_storage_definitions()
         self.create_ceph_resources(storage_classes)
 
-    def _on_ceph_admin_joined(self, event: RelationJoinedEvent) -> None:  # pragma: no cover
+    @needs_leader
+    def safe_load_ceph_admin_data(self, relation: Relation, remote_unit: Unit) -> bool:
+        """Load data from ceph-mon:admin relation and store it in StoredState.
+
+        This method expects all the required data (fsid, key, mon_hosts) to be present in the
+        relation data. If any of the expected keys is missing, none of the data will be loaded.
+
+        :param relation: Instance of ceph-mon:admin relation.
+        :param remote_unit: Unit instance representing remote ceph-mon unit.
+        :return: `True` if all the data successfully loaded, otherwise `False`
+        """
+        unit_data = relation.data[remote_unit]
+        expected_relation_keys = (
+            "fsid",
+            "key",
+            "mon_hosts",
+        )
+
+        missing_data = [key for key in expected_relation_keys if key not in unit_data]
+        if missing_data:
+            logger.warning(
+                "Ceph relation with %s is missing data: %s", remote_unit.name, missing_data
+            )
+            self.unit.status = WaitingStatus("Ceph relation is missing data.")
+            success = False
+        else:
+            for relation_key in expected_relation_keys:
+                self._stored.ceph_data[relation_key] = unit_data.get(relation_key)
+            success = True
+
+        return success
+
+    def _on_ceph_admin_joined(self, event: RelationJoinedEvent) -> None:
         """Create necessary k8s resources when relation is formed with ceph-mon."""
         self.check_required_relations()
         if not self.unit.is_leader():
@@ -297,27 +331,39 @@ class CephCsiCharm(CharmBase):
             # created resources
             return
 
-        unit_data = event.relation.data[event.unit]
-        expected_relation_keys = (
-            "fsid",
-            "key",
-            "mon_hosts",
-        )
+        if self.safe_load_ceph_admin_data(event.relation, event.unit):
+            all_resources = self.render_all_resource_definitions()
+            self.create_ceph_resources(all_resources)
+            self._stored.resources_created = True
 
-        for relation_key in expected_relation_keys:
-            self._stored.ceph_data[relation_key] = unit_data.get(relation_key)
-
-        missing_data = [key for key, value in self._stored.ceph_data.items() if value is None]
-        if missing_data:
-            logger.warning(
-                "Ceph relation with %s is missing data: %s", event.unit.name, missing_data
-            )
-            self.unit.status = WaitingStatus("Ceph relation is missing data.")
+    def _on_ceph_admin_changed(self, event: RelationChangedEvent) -> None:
+        self.check_required_relations()
+        if not self.unit.is_leader():
+            # Skip resource update on non-leader unit
+            logger.info("Skipping Kubernetes resource update from non-leader unit")
             return
 
-        all_resources = self.render_all_resource_definitions()
-        self.create_ceph_resources(all_resources)
-        self._stored.resources_created = True
+        if self.safe_load_ceph_admin_data(event.relation, event.unit):
+            if self._stored.resources_created:
+                # Update already existing resources that depend on ceph-admin data
+                secret_key = self.ceph_context["kubernetes_key"]
+                fsid = self.ceph_context["fsid"]
+                mon_hosts = self._stored.ceph_data.get("mon_hosts", "").split()
+
+                for resource in self.resources:
+                    if isinstance(resource, Secret):
+                        resource.update_opaque_data("userKey", secret_key)
+                    elif isinstance(resource, StorageClass):
+                        resource.update_cluster_id(fsid)
+                    elif isinstance(resource, ConfigMap):
+                        config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
+                        resource.update_config_json(json.dumps(config_data, indent=4))
+            else:
+                # No kubernetes resources exist yet. This is the first time that ceph-admin
+                # relation has all the required data
+                all_resources = self.render_all_resource_definitions()
+                self.create_ceph_resources(all_resources)
+                self._stored.resources_created = True
 
     def _on_ceph_client_joined(self, event: RelationJoinedEvent) -> None:
         """Use ceph-mon:client relation to request creation of ceph-pools."""

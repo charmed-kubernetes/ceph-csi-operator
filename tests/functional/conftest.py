@@ -30,8 +30,12 @@ async def kube_config(ops_test: OpsTest) -> Path:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         kube_config_file = Path(tmp_dir).joinpath("kube_config")
+        # This split is needed because `model_name` gets reported in format "<controller>:<model>"
+        model_name = ops_test.model_name.split(":", maxsplit=1)[-1]
 
-        cmd = "juju scp {}:config {}".format(k8s_master.name, kube_config_file).split()
+        cmd = "juju scp -m {} {}:config {}".format(
+            model_name, k8s_master.name, kube_config_file
+        ).split()
         return_code, _, std_err = await ops_test.run(*cmd)
         assert return_code == 0, std_err
         yield kube_config_file

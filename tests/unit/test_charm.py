@@ -384,3 +384,166 @@ class TestCharm(unittest.TestCase):
         self.harness.charm._on_ceph_client_removed(MagicMock())
 
         logger_mock.assert_called_with(expected_msg, pools)
+
+    def test_safe_load_ceph_admin_data(self):
+        """Test that `safe_load_ceph_admin_data` method loads data properly.
+
+        Data are expected to be stored in the StoredState only if all the required keys are present
+        in the relation data.
+        """
+        relation_mock = MagicMock()
+        ceph_mon_unit = MagicMock()
+        ceph_mon_unit.name = "ceph-mon/0"
+
+        ceph_mons = "10.0.0.1, 10.0.0.2"
+        fsid = "foo"
+        key = "bar"
+        relation_data = {"fsid": fsid, "key": key, "mon_hosts": ceph_mons}
+
+        # setup relation data
+        self.harness.set_leader(True)
+        relation_mock.data = {ceph_mon_unit: relation_data}
+
+        # All data should be loaded
+        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+
+        self.assertTrue(result)
+        self.assertEqual(self.harness.charm._stored.ceph_data["fsid"], fsid)
+        self.assertEqual(self.harness.charm._stored.ceph_data["key"], key)
+        self.assertEqual(self.harness.charm._stored.ceph_data["mon_hosts"], ceph_mons)
+
+        # reset
+        self.harness.charm._stored.ceph_data = {}
+
+        # don't load anything if relation data is missing
+        relation_mock.data[ceph_mon_unit].pop("mon_hosts")
+
+        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+        self.assertFalse(result)
+        self.assertNotIn("fsid", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("key", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("mon_hosts", self.harness.charm._stored.ceph_data)
+
+        # don't execute anything on non-leader unit
+        self.harness.set_leader(False)
+        relation_mock.data[ceph_mon_unit] = relation_data
+
+        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+
+        self.assertIs(result, None)
+        self.assertNotIn("fsid", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("key", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("mon_hosts", self.harness.charm._stored.ceph_data)
+
+    def test_ceph_admin_joined_triggered(self):
+        """Test that new "ceph-mon:admin" relation triggers `_on_ceph_admin_joined`."""
+        on_admin_joined_mock = self.patch(CephCsiCharm, "_on_ceph_admin_joined")
+
+        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_ADMIN_RELATION, "ceph-mon")
+        self.harness.add_relation_unit(relation_id, "ceph-mon/0")
+
+        self.assertEqual(on_admin_joined_mock.call_count, 1)
+
+    def test_ceph_admin_joined_non_leader(self):
+        """Test that `_on_ceph_admin_joined` method is not executed on non-leader units."""
+        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
+        logger_mock = self.patch(logger, "info")
+        expected_log_msg = "Skipping Kubernetes resource creation from non-leader unit"
+        event_mock = MagicMock()
+
+        self.harness.set_leader(False)
+        self.harness.charm._stored.resources_created = False
+
+        self.harness.charm._on_ceph_admin_joined(event_mock)
+
+        logger_mock.assert_called_once_with(expected_log_msg)
+        load_data_mock.assert_not_called()
+
+    def test_ceph_admin_joined_resources_created(self):
+        """Test that if resources are already created, `_on_ceph_admin_joined` has no effect."""
+        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
+        event_mock = MagicMock()
+
+        self.harness.set_leader(True)
+        self.harness.charm._stored.resources_created = True
+
+        self.harness.charm._on_ceph_admin_joined(event_mock)
+
+        load_data_mock.assert_not_called()
+
+    def test_ceph_admin_joined_creates_resources(self):
+        """Test that leader unit creates k8s resources on ceph-mon:admin relation joined."""
+        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
+        create_resources_mock = self.patch(CephCsiCharm, "create_ceph_resources")
+        expected_resources = self.harness.charm.render_all_resource_definitions()
+        self.harness.set_leader(True)
+
+        self.harness.charm._on_ceph_admin_joined(MagicMock())
+
+        create_resources_mock.assert_called_once_with(expected_resources)
+        self.assertTrue(self.harness.charm._stored.resources_created)
+
+    def test_ceph_admin_changed_triggered(self):
+        """Test that change in ceph-mon:admin relation triggers `on_ceph_admin_changed`."""
+        on_admin_changed_mock = self.patch(CephCsiCharm, "_on_ceph_admin_changed")
+        ceph_unit = "ceph-mon/0"
+
+        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_ADMIN_RELATION, "ceph-mon")
+        self.harness.add_relation_unit(relation_id, ceph_unit)
+
+        self.harness.update_relation_data(relation_id, ceph_unit, {"foo": "bar"})
+        self.assertEqual(on_admin_changed_mock.call_count, 1)
+
+    def test_ceph_admin_changed_non_leader(self):
+        """Test that `_on_ceph_admin_changed` does not perform any action on non-leader unit."""
+        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
+        logger_mock = self.patch(logger, "info")
+        expected_message = "Skipping Kubernetes resource update from non-leader unit"
+
+        self.harness.set_leader(False)
+
+        self.harness.charm._on_ceph_admin_changed(MagicMock())
+
+        logger_mock.assert_called_once_with(expected_message)
+        load_data_mock.assert_not_called()
+
+    def test_ceph_admin_changed_resource_created(self):
+        """Test that all resources are created if no resources were created yet.
+
+        `_on_ceph_admin_changed` is expected to act similar to `_on_ceph_admin_joined`, and create
+        all the resources if no resources were created yet. This occurs when none of the relations
+        with ceph-mon unit had all the expected data on joining.
+        """
+        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
+        create_resources_mock = self.patch(CephCsiCharm, "create_ceph_resources")
+        expected_resources = self.harness.charm.render_all_resource_definitions()
+        self.harness.set_leader(True)
+
+        self.harness.charm._on_ceph_admin_changed(MagicMock())
+
+        create_resources_mock.assert_called_once_with(expected_resources)
+        self.assertTrue(self.harness.charm._stored.resources_created)
+
+    def test_ceph_admin_changed_resource_update(self):
+        """Test that resources are updated on change in ceph-mon:admin relation."""
+        ceph_mons = "10.0.0.1 10.0.0.2"
+        fsid = "foo"
+        key = "bar"
+        ceph_context_mock = {"fsid": fsid, "kubernetes_key": key, "mon_hosts": ceph_mons}
+        expected_config_map_update = [{"clusterID": fsid, "monitors": ceph_mons.split()}]
+
+        secret_mock = self.patch(Secret, "update_opaque_data")
+        storage_class_mock = self.patch(StorageClass, "update_cluster_id")
+        config_map_mock = self.patch(ConfigMap, "update_config_json")
+
+        self.patch_property(CephCsiCharm, "ceph_context").return_value = ceph_context_mock
+        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
+        self.harness.charm._stored.ceph_data["mon_hosts"] = ceph_mons
+        self.harness.set_leader(True)
+        self.harness.charm._stored.resources_created = True
+
+        self.harness.charm._on_ceph_admin_changed(MagicMock())
+
+        secret_mock.assert_called_with("userKey", key)
+        storage_class_mock.assert_called_with(fsid)
+        config_map_mock.assert_called_with(json.dumps(expected_config_map_update, indent=4))

@@ -12,7 +12,7 @@ interface for their removal.
 # Remove this pylint skip when functionality is added to `Resource` class
 # pylint: disable=too-few-public-methods
 import logging
-from typing import Callable
+from typing import Any, Callable, Dict
 
 from kubernetes.client import AppsV1Api, CoreV1Api
 from kubernetes.client import RbacAuthorizationV1Api as RbacAuthApi
@@ -68,6 +68,20 @@ class Resource:
             "implemented".format(self.__class__.__name__, self.name)
         )
 
+    @property
+    def _update_action(self) -> Callable:
+        """Return method of k8s api client that updates cluster resource."""
+        raise MissingMethod(
+            "Update of {} resource is not implemented.".format(self.__class__.__name__)
+        )
+
+    @property
+    def _update_namespaced_action(self) -> Callable:
+        """Return method of k8s api client that updates namespaced resource."""
+        raise MissingMethod(
+            "Update of {} namespaced resource is not implemented.".format(self.__class__.__name__)
+        )
+
     def remove(self) -> None:
         """Call appropriate api method to remove k8s resource."""
         if self.namespace:
@@ -85,6 +99,33 @@ class Resource:
                 self.__class__.__name__,
             )
             self._remove_action(self.name)
+
+    def update(self, patch: Dict[str, Any]) -> None:
+        """Updates k8s resource with new data.
+
+        Argument "patch" is expected to be a dict consisting of keys that identify resource
+        attributes and their values. For example, to update name of the Pod use:
+
+            {"metadata": {"name": "newName"}}
+
+        :param patch: attribute paths to update and their values (see docstring).
+        :return: None
+        """
+        if self.namespace:
+            logger.debug(
+                "Updating Kubernetes resource '%s' (%s) in namespace '%s'",
+                self.name,
+                self.__class__.__name__,
+                self.namespace,
+            )
+            self._update_namespaced_action(self.name, self.namespace, body=patch)
+        else:
+            self._update_action(self.name, body=patch)
+            logger.debug(
+                "Updating cluster-wide Kubernetes resource '%s' (%s)",
+                self.name,
+                self.__class__.__name__,
+            )
 
 
 class CoreResource(Resource):
@@ -154,6 +195,19 @@ class Secret(CoreResource):
     def _remove_namespaced_action(self) -> Callable:
         return self.api.delete_namespaced_secret
 
+    @property
+    def _update_namespaced_action(self) -> Callable:
+        return self.api.patch_namespaced_secret
+
+    def update_opaque_data(self, key: str, value: str) -> None:
+        """Update arbitrary data in opaque secret.
+
+        :param key: Key in opaque secrete data.
+        :param value: Value of the key
+        :return: None
+        """
+        self.update({"stringData": {key: value}})
+
 
 class ServiceAccount(CoreResource):
     """Kubernetes 'ServiceAccount' resource."""
@@ -177,6 +231,14 @@ class ConfigMap(CoreResource):
     @property
     def _remove_namespaced_action(self) -> Callable:
         return self.api.delete_namespaced_config_map
+
+    @property
+    def _update_namespaced_action(self) -> Callable:
+        return self.api.patch_namespaced_config_map
+
+    def update_config_json(self, config: str) -> None:
+        """Update value of "config.json" field in "data" attribute."""
+        self.update({"data": {"config.json": config}})
 
 
 class ClusterRole(AuthResource):
@@ -217,6 +279,14 @@ class StorageClass(StorageResource):
     @property
     def _remove_action(self) -> Callable:
         return self.api.delete_storage_class
+
+    @property
+    def _update_action(self) -> Callable:
+        return self.api.patch_storage_class
+
+    def update_cluster_id(self, id_: str) -> None:
+        """Update clusterID."""
+        self.update({"parameters": {"clusterID": id_}})
 
 
 class Deployment(AppsResource):
