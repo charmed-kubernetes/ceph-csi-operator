@@ -332,7 +332,8 @@ class TestCharm(unittest.TestCase):
         self.assertTrue(self.harness.charm.unit.status.message.startswith("Bad configuration"))
 
         # reset mocks
-        update_default_storage_mock.reset_mock(side_effect=True)
+        update_default_storage_mock.reset_mock()
+        update_default_storage_mock.side_effect = None
 
         # Assert that setting valid value for default storage class sets unit status back to Active
         self.harness.update_config({"default-storage": xfs_storage})
