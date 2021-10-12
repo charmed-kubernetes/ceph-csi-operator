@@ -94,3 +94,50 @@ async def test_storage_class(
     assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
         reading_pod_name, writing_pod_name
     )
+
+
+async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest):
+    """Test that updating "default-storage" configuration takes effect in k8s resources."""
+
+    async def assert_is_default_class(expected_default: str, api: client.StorageV1Api):
+        for class_ in api.list_storage_class().items:
+            is_default = class_.metadata.annotations[default_property]
+            if class_.metadata.name == expected_default:
+                assert is_default == "true"
+            else:
+                assert is_default == "false"
+
+    default_property = "storageclass.kubernetes.io/is-default-class"
+    expected_classes = ["ceph-xfs", "ceph-ext4"]
+    ceph_csi_app = ops_test.model.applications["ceph-csi"]
+
+    config.load_kube_config(str(kube_config))
+    storage_api = client.StorageV1Api()
+
+    # Scan available StorageClasses and make sure that all expected classes are present.
+    classes_to_test = []
+    original_default = None
+    logger.debug("Discovering available StorageClasses")
+    for storage_class in storage_api.list_storage_class().items:
+        name = storage_class.metadata.name
+        is_default = storage_class.metadata.annotations[default_property]
+        classes_to_test.append(name)
+        logger.debug("StorageClass: %s; isDefault: %s", name, is_default)
+
+        if name not in expected_classes:
+            pytest.fail("Unexpected storage class in the cluster: {}".format(name))
+
+        if is_default:
+            original_default = name
+
+    # move currently active default class to last place so we end up with the same
+    # cluster setting after the test
+    classes_to_test.remove(original_default)
+    classes_to_test.append(original_default)
+
+    # Change 'default-storage' config in charm and make sure it has effect on k8s cluster.
+    for storage_class in classes_to_test:
+        logger.info("Setting %s StorageClass to be default.", storage_class)
+        await ceph_csi_app.set_config({"default-storage": storage_class})
+        await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=30)
+        await assert_is_default_class(storage_class, storage_api)

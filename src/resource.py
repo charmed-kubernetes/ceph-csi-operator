@@ -288,6 +288,17 @@ class StorageClass(StorageResource):
         """Update clusterID."""
         self.update({"parameters": {"clusterID": id_}})
 
+    def set_default(self, is_default: bool = True) -> None:
+        """Set default status of the StorageClass."""
+        patch = {
+            "metadata": {
+                "annotations": {
+                    "storageclass.kubernetes.io/is-default-class": str(is_default).lower()
+                }
+            }
+        }
+        self.update(patch)
+
 
 class Deployment(AppsResource):
     """Kubernetes 'Deployment' resource."""
