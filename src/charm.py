@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 UNIT_READY_STATUS = ActiveStatus("Unit is ready")
+BAD_CONFIG_PREFIX = "Bad configuration option for"
 
 
 def needs_leader(func: Callable) -> Callable:
@@ -439,13 +440,13 @@ class CephCsiCharm(CharmBase):
                 self.update_default_storage_class(default_class)
             except ValueError:
                 self.unit.status = BlockedStatus(
-                    "Bad configuration option for 'default-storage'. See logs for more info.'"
+                    "{} 'default-storage'. See logs for more info.'".format(BAD_CONFIG_PREFIX)
                 )
                 return
 
         # Resolve blocked state caused by bad configuration
         status = self.unit.status
-        if status.name == BlockedStatus.name and status.message.startswith("Bad configuration"):
+        if status.name == BlockedStatus.name and status.message.startswith(BAD_CONFIG_PREFIX):
             self.unit.status = UNIT_READY_STATUS
 
 

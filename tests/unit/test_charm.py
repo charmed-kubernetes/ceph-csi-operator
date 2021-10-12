@@ -26,6 +26,7 @@ from kubernetes.client import ApiException
 from ops.testing import Harness
 
 from charm import (
+    BAD_CONFIG_PREFIX,
     UNIT_READY_STATUS,
     ActiveStatus,
     BlockedStatus,
@@ -329,7 +330,7 @@ class TestCharm(unittest.TestCase):
         self.harness.update_config({"default-storage": bad_storage})
 
         self.assertEqual(self.harness.charm.unit.status.name, BlockedStatus.name)
-        self.assertTrue(self.harness.charm.unit.status.message.startswith("Bad configuration"))
+        self.assertTrue(self.harness.charm.unit.status.message.startswith(BAD_CONFIG_PREFIX))
 
         # reset mocks
         update_default_storage_mock.reset_mock()
