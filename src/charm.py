@@ -139,9 +139,9 @@ class CephCsiCharm(CharmBase):
     def resources(self) -> List[Resource]:
         """Return list of k8s resources tied to the ceph-csi charm.
 
-        Returned list contains instances that inherit from `Resource` class
-        which provides convenience method `remove()` that removes resources
-        from cluster or namespace.
+        Returned list contains instances that inherit from `Resource` class which provides
+        convenience methods to work with Kubernetes resources.
+        Each instance in the list maps to a specific resources in Kubernetes cluster.
 
         Example:
             for resource in self.resources:
@@ -440,7 +440,7 @@ class CephCsiCharm(CharmBase):
                 self.update_default_storage_class(default_class)
             except ValueError:
                 self.unit.status = BlockedStatus(
-                    "{} 'default-storage'. See logs for more info.'".format(BAD_CONFIG_PREFIX)
+                    "{} 'default-storage'. See logs for more info.".format(BAD_CONFIG_PREFIX)
                 )
                 return
 
