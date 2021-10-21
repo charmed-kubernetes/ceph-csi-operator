@@ -25,7 +25,18 @@ from unittest.mock import MagicMock, PropertyMock, call, patch
 from kubernetes.client import ApiException
 from ops.testing import Harness
 
-from charm import CephCsiCharm, CreatePoolConfig, client, config, logger, utils
+from charm import (
+    BAD_CONFIG_PREFIX,
+    UNIT_READY_STATUS,
+    ActiveStatus,
+    BlockedStatus,
+    CephCsiCharm,
+    CreatePoolConfig,
+    client,
+    config,
+    logger,
+    utils,
+)
 
 
 class TestCharm(unittest.TestCase):
@@ -220,6 +231,7 @@ class TestCharm(unittest.TestCase):
                 else:
                     self.assertNotIn(default_attribute, annotation)
 
+        self.patch(CephCsiCharm, "update_default_storage_class")
         xfs = self.harness.charm.XFS_STORAGE
         ext4 = self.harness.charm.EXT4_STORAGE
 
@@ -245,31 +257,91 @@ class TestCharm(unittest.TestCase):
         resource_definitions.assert_called_once_with()
         storage_definitions.assert_called_once_with()
 
-    def test_update_storage_class(self):
-        """Test that update_storage_classes() removes old resources and re-adds new resources."""
-        resources = [{"kind": "StorageClass", "metadata": {"name": "sc1"}}]
+    def test_update_default_storage_class(self):
+        """Test that update_default_storage_class() patches StorageClass resources."""
+        ext4_class_update_mock = MagicMock()
+        xfs_class_update_mock = MagicMock()
+        ext4_storage = self.harness.charm.EXT4_STORAGE
+        xfs_storage = self.harness.charm.XFS_STORAGE
+
+        # Setup mock for all expected StorageClasses
+        all_resources = self.harness.charm.resources
+        for resource in all_resources:
+            if isinstance(resource, StorageClass):
+                if resource.name == xfs_storage:
+                    xfs_class_update_mock = self.patch(resource, "set_default")
+                elif resource.name == ext4_storage:
+                    ext4_class_update_mock = self.patch(resource, "set_default")
+                else:
+                    self.fail("Storage class '{}' not covered by unit tests".format(resource.name))
+
+        self.patch_property(CephCsiCharm, "resources").return_value = all_resources
+
+        # Expect no action on non-leader unit
+        self.harness.charm.update_default_storage_class(ext4_storage)
+        self.harness.charm.update_default_storage_class(xfs_storage)
+        self.harness.charm.update_default_storage_class("Foo")
+
+        ext4_class_update_mock.assert_not_called()
+        xfs_class_update_mock.assert_not_called()
+
+        # Set unit as leader and execute actual updates
         self.harness.set_leader(True)
-        remove_storage_mock = self.patch(StorageClass, "remove")
-        render_storage_mock = self.patch(CephCsiCharm, "render_storage_definitions")
-        render_storage_mock.return_value = resources
-        create_resources_mock = self.patch(CephCsiCharm, "create_ceph_resources")
 
-        self.harness.charm.update_storage_classes()
+        # Set ext4 as default storage class
+        self.harness.charm.update_default_storage_class(ext4_storage)
+        ext4_class_update_mock.assert_called_once_with(True)
+        xfs_class_update_mock.assert_called_once_with(False)
 
-        remove_storage_mock.assert_called_with()
-        create_resources_mock.assert_called_with(resources)
+        # reset mocks
+        ext4_class_update_mock.reset_mock()
+        xfs_class_update_mock.reset_mock()
 
-        # Test that nothing is executed on non-leader units
-        self.harness.set_leader(False)
-        remove_storage_mock.reset_mock()
-        render_storage_mock.reset_mock()
-        create_resources_mock.reset_mock()
+        # Set xfs as default storage class
+        self.harness.charm.update_default_storage_class(xfs_storage)
+        ext4_class_update_mock.assert_called_once_with(False)
+        xfs_class_update_mock.assert_called_once_with(True)
 
-        self.harness.charm.update_storage_classes()
+        # Set unknown default storage class
+        with self.assertRaises(ValueError):
+            self.harness.charm.update_default_storage_class("Foo")
 
-        remove_storage_mock.assert_not_called()
-        render_storage_mock.assert_not_called()
-        create_resources_mock.assert_not_called()
+    def test_update_config(self):
+        """Test handling of charm config updates."""
+        update_default_storage_mock = self.patch(CephCsiCharm, "update_default_storage_class")
+        update_stored_state_mock = self.patch(CephCsiCharm, "update_stored_state")
+
+        update_stored_state_mock.return_value = True
+
+        # Update default storage class
+        ext4_storage = self.harness.charm.EXT4_STORAGE
+        xfs_storage = self.harness.charm.XFS_STORAGE
+        bad_storage = "foo"
+
+        self.harness.update_config({"default-storage": ext4_storage})
+
+        update_default_storage_mock.assert_called_once_with(ext4_storage)
+
+        # reset mocks
+        update_default_storage_mock.reset_mock()
+
+        # Update default storage class with bad value and assert that it sets Blocked state
+        update_default_storage_mock.side_effect = ValueError
+        self.harness.update_config({"default-storage": bad_storage})
+
+        self.assertEqual(self.harness.charm.unit.status.name, BlockedStatus.name)
+        self.assertTrue(self.harness.charm.unit.status.message.startswith(BAD_CONFIG_PREFIX))
+
+        # reset mocks
+        update_default_storage_mock.reset_mock()
+        update_default_storage_mock.side_effect = None
+
+        # Assert that setting valid value for default storage class sets unit status back to Active
+        self.harness.update_config({"default-storage": xfs_storage})
+
+        update_default_storage_mock.assert_called_once_with(xfs_storage)
+        self.assertEqual(self.harness.charm.unit.status.name, ActiveStatus.name)
+        self.assertEqual(self.harness.charm.unit.status.message, UNIT_READY_STATUS.message)
 
     def test_resource_removal(self):
         """Test removal of the k8s resources that happens when ceph-mon relation is removed."""

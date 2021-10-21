@@ -52,6 +52,10 @@ from ops.model import ActiveStatus, BlockedStatus, Relation, Unit, WaitingStatus
 logger = logging.getLogger(__name__)
 
 
+UNIT_READY_STATUS = ActiveStatus("Unit is ready")
+BAD_CONFIG_PREFIX = "Bad configuration option for"
+
+
 def needs_leader(func: Callable) -> Callable:
     """Ensure that function with this decorator is executed only if on leader units."""
 
@@ -135,9 +139,9 @@ class CephCsiCharm(CharmBase):
     def resources(self) -> List[Resource]:
         """Return list of k8s resources tied to the ceph-csi charm.
 
-        Returned list contains instances that inherit from `Resource` class
-        which provides convenience method `remove()` that removes resources
-        from cluster or namespace.
+        Returned list contains instances that inherit from `Resource` class which provides
+        convenience methods to work with Kubernetes resources.
+        Each instance in the list maps to a specific resources in Kubernetes cluster.
 
         Example:
             for resource in self.resources:
@@ -217,7 +221,7 @@ class CephCsiCharm(CharmBase):
                 "Missing relations: {}".format(", ".join(missing_relations))
             )
         else:
-            self.unit.status = ActiveStatus("Unit is ready")
+            self.unit.status = UNIT_READY_STATUS
 
     @needs_leader
     def create_ceph_resources(self, resources: List[Dict]) -> None:  # pylint: disable=R0201
@@ -277,14 +281,33 @@ class CephCsiCharm(CharmBase):
         return self.render_resource_definitions() + self.render_storage_definitions()
 
     @needs_leader
-    def update_storage_classes(self) -> None:
-        """Re-render templates and update StorageClass resources in k8s cluster."""
-        logger.info("Updating StorageClass definitions in Kubernetes.")
-        for resource in self.resources:
-            if isinstance(resource, StorageClass):
-                resource.remove()
-        storage_classes = self.render_storage_definitions()
-        self.create_ceph_resources(storage_classes)
+    def update_default_storage_class(self, default_class_name: str) -> None:
+        """Set selected StorageClass as a default option."""
+        available_classes = [sc for sc in self.resources if isinstance(sc, StorageClass)]
+
+        # Find StorageClass that matches `default_class_name`
+        try:
+            default_class = [sc for sc in available_classes if sc.name == default_class_name][0]
+        except IndexError as exc:
+            error_msg = (
+                "Unexpected config value for 'default-storage'. "
+                "Valid values: {}. Got: {}".format(
+                    [sc.name for sc in available_classes], default_class_name
+                )
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg) from exc
+
+        logger.info("Setting '%s' StorageClass as default.", default_class_name)
+
+        # according to documentation, proper way to set new default SC is to first unset current
+        # default StorageClass and then set the new default.
+        # https://kubernetes.io/docs/tasks/administer-cluster/change-default-storage-class/
+        for storage_class in available_classes:
+            if storage_class.name != default_class_name:
+                storage_class.set_default(False)
+
+        default_class.set_default(True)
 
     @needs_leader
     def safe_load_ceph_admin_data(self, relation: Relation, remote_unit: Unit) -> bool:
@@ -411,11 +434,20 @@ class CephCsiCharm(CharmBase):
     def _on_config_changed(self, _: ConfigChangedEvent) -> None:
         """Handle configuration Change."""
         if self.update_stored_state("default-storage", "default_storage_class"):
-            logger.info(
-                "Config changed. New value: 'default-storage' = '%s'",
-                self.config.get("default-storage"),
-            )
-            self.update_storage_classes()
+            default_class = self.config.get("default-storage")
+            logger.info("Config changed. New value: 'default-storage' = '%s'", default_class)
+            try:
+                self.update_default_storage_class(default_class)
+            except ValueError:
+                self.unit.status = BlockedStatus(
+                    "{} 'default-storage'. See logs for more info.".format(BAD_CONFIG_PREFIX)
+                )
+                return
+
+        # Resolve blocked state caused by bad configuration
+        status = self.unit.status
+        if status.name == BlockedStatus.name and status.message.startswith(BAD_CONFIG_PREFIX):
+            self.unit.status = UNIT_READY_STATUS
 
 
 if __name__ == "__main__":  # pragma: no cover

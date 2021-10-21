@@ -20,7 +20,7 @@ from resource import (
     ServiceAccount,
     StorageClass,
 )
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, call, patch
 
 
 class TestResourceBaseClass(unittest.TestCase):
@@ -315,6 +315,27 @@ class TestResourceActions(unittest.TestCase):
         storage_class.update_cluster_id(new_id)
 
         update_mock.assert_called_once_with(expected_patch)
+
+    def test_storage_class_set_default(self):
+        """Test that `StorageClass.set_default` calls update method properly."""
+
+        def get_patch(is_default: bool) -> dict:
+            return {
+                "metadata": {
+                    "annotations": {
+                        "storageclass.kubernetes.io/is-default-class": str(is_default).lower()
+                    }
+                }
+            }
+
+        update_mock = self.patch(StorageClass, "update")
+        expected_calls = [call(get_patch(True)), call(get_patch(False))]
+
+        storage_class = StorageClass(self.api_mock, self.res_name)
+        storage_class.set_default(True)
+        storage_class.set_default(False)
+
+        update_mock.assert_has_calls(expected_calls)
 
     def test_deployment_removal(self):
         """Test that removing Deployment resource calls appropriate api method."""
