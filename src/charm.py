@@ -15,6 +15,8 @@ develop a new k8s charm using the Operator Framework:
 import itertools
 import json
 import logging
+import os
+import subprocess
 from functools import wraps
 from resource import (
     ClusterRole,
@@ -33,7 +35,7 @@ from resource import (
 from typing import Any, Callable, Dict, List
 
 import yaml
-from charms.ceph_csi.v0.ceph_client import CephRequest, CreatePoolConfig
+from interface_ceph_client import ceph_client  # type: ignore
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, config, utils
 from kubernetes.client.exceptions import ApiException
@@ -47,7 +49,7 @@ from ops.charm import (
 )
 from ops.framework import StoredDict, StoredState
 from ops.main import main
-from ops.model import ActiveStatus, BlockedStatus, Relation, Unit, WaitingStatus
+from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +78,6 @@ def needs_leader(func: Callable) -> Callable:
 class CephCsiCharm(CharmBase):
     """Charm the service."""
 
-    CEPH_ADMIN_RELATION = "ceph-admin"
     CEPH_CLIENT_RELATION = "ceph-client"
     K8S_NS = "default"
 
@@ -100,12 +101,13 @@ class CephCsiCharm(CharmBase):
     def __init__(self, *args: Any) -> None:
         """Setup even observers and initial storage values."""
         super().__init__(*args)
+        self.ceph_client = ceph_client.CephClientRequires(self, "ceph-client")
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
-        self.framework.observe(self.on.ceph_admin_relation_joined, self._on_ceph_admin_joined)
-        self.framework.observe(self.on.ceph_admin_relation_changed, self._on_ceph_admin_changed)
-        self.framework.observe(self.on.ceph_admin_relation_broken, self.purge_k8s_resources)
-        self.framework.observe(self.on.ceph_client_relation_joined, self._on_ceph_client_joined)
+        self.framework.observe(
+            self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
+        )
+        self.framework.observe(self.on.ceph_client_relation_changed, self._on_ceph_client_changed)
         self.framework.observe(self.on.ceph_client_relation_broken, self._on_ceph_client_removed)
         self._stored.set_default(ceph_data={})
         self._stored.set_default(resources_created=False)
@@ -126,13 +128,80 @@ class CephCsiCharm(CharmBase):
         return dict(stored_dict.items())
 
     @property
+    def auth(self) -> str:
+        """Return stored Ceph auth mode from ceph-client relation"""
+        return self._stored.ceph_data.get("auth")
+
+    @property
+    def key(self) -> str:
+        """Return stored Ceph key from ceph-client relation"""
+        return self._stored.ceph_data.get("key")
+
+    @property
+    def mon_hosts(self) -> List[str]:
+        """Return stored Ceph monitor hosts from ceph-client relation"""
+        return list(self._stored.ceph_data.get("mon_hosts", []))
+
+    def install_ceph_common(self) -> None:
+        """Install ceph-common apt package"""
+        subprocess.check_call(["apt-get", "update"])
+        subprocess.check_call(["apt-get", "install", "-y", "ceph-common"])
+
+    def write_ceph_cli_config(self) -> None:
+        """Write Ceph CLI .conf file"""
+        ceph_conf_path = "/etc/ceph/ceph.conf"
+        ceph_conf = f"""[global]
+auth cluster required = {self.auth}
+auth service required = {self.auth}
+auth client required = {self.auth}
+keyring = /etc/ceph/$cluster.$name.keyring
+mon host = {" ".join(self.mon_hosts)}
+
+log to syslog = true
+err to syslog = true
+clog to syslog = true
+mon cluster log to syslog = true
+debug mon = 1/5
+debug osd = 1/5
+
+[client]
+log file = /var/log/ceph.log
+"""
+        with open(ceph_conf_path, "w") as f:
+            f.write(ceph_conf)
+
+    def write_ceph_cli_keyring(self) -> None:
+        """Write Ceph CLI keyring file"""
+        ceph_keyring_path = "/etc/ceph/ceph.client.{}.keyring".format(self.app.name)
+        ceph_keyring = f"[client.{self.app.name}]\n\tkey = {self.key}\n"
+        with open(ceph_keyring_path, "w") as f:
+            f.write(ceph_keyring)
+
+    def configure_ceph_cli(self) -> None:
+        """Configure Ceph CLI"""
+        ceph_conf_dir = "/etc/ceph"
+        os.makedirs(ceph_conf_dir, exist_ok=True)
+        self.write_ceph_cli_config()
+        self.write_ceph_cli_keyring()
+
+    def ceph_cli(self, *args: str, timeout: int = 60) -> str:
+        """Run Ceph CLI command"""
+        cmd = ["ceph", "--user", self.app.name] + list(args)
+        return subprocess.check_output(cmd, timeout=timeout).decode("UTF-8")
+
+    def get_ceph_fsid(self) -> str:
+        """Get the Ceph FSID (cluster ID)"""
+        fsid = self.ceph_cli("fsid").strip()
+        return fsid
+
+    @property
     def ceph_context(self) -> Dict[str, str]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
-        raw_mon_hosts = self._stored.ceph_data.get("mon_hosts", "").split()
         return {
-            "fsid": self._stored.ceph_data.get("fsid"),
-            "kubernetes_key": self._stored.ceph_data.get("key"),
-            "mon_hosts": json.dumps(raw_mon_hosts),
+            "fsid": self.get_ceph_fsid(),
+            "kubernetes_key": self.key,
+            "mon_hosts": json.dumps(self.mon_hosts),
+            "user": self.app.name,
         }
 
     @property
@@ -205,11 +274,12 @@ class CephCsiCharm(CharmBase):
 
     def _on_install(self, _: InstallEvent) -> None:
         """Execute "on install" event callback."""
+        self.install_ceph_common()
         self.check_required_relations()
 
     def check_required_relations(self) -> None:
         """Run check if any required relations are missing"""
-        required_relations = [self.CEPH_ADMIN_RELATION, self.CEPH_CLIENT_RELATION]
+        required_relations = [self.CEPH_CLIENT_RELATION]
         missing_relations = [
             relation
             for relation in required_relations
@@ -310,68 +380,75 @@ class CephCsiCharm(CharmBase):
         default_class.set_default(True)
 
     @needs_leader
-    def safe_load_ceph_admin_data(self, relation: Relation, remote_unit: Unit) -> bool:
-        """Load data from ceph-mon:admin relation and store it in StoredState.
+    def safe_load_ceph_client_data(self) -> bool:
+        """Load data from ceph-mon:client relation and store it in StoredState.
 
-        This method expects all the required data (fsid, key, mon_hosts) to be present in the
+        This method expects all the required data (key, mon_hosts) to be present in the
         relation data. If any of the expected keys is missing, none of the data will be loaded.
 
-        :param relation: Instance of ceph-mon:admin relation.
+        :param relation: Instance of ceph-mon:client relation.
         :param remote_unit: Unit instance representing remote ceph-mon unit.
         :return: `True` if all the data successfully loaded, otherwise `False`
         """
-        unit_data = relation.data[remote_unit]
-        expected_relation_keys = (
-            "fsid",
-            "key",
-            "mon_hosts",
-        )
+        relation_data = self.ceph_client.get_relation_data()
+        expected_relation_keys = ("auth", "key", "mon_hosts")
 
-        missing_data = [key for key in expected_relation_keys if key not in unit_data]
+        missing_data = [key for key in expected_relation_keys if key not in relation_data]
         if missing_data:
-            logger.warning(
-                "Ceph relation with %s is missing data: %s", remote_unit.name, missing_data
-            )
+            logger.warning("Ceph relation is missing data: %s", missing_data)
             self.unit.status = WaitingStatus("Ceph relation is missing data.")
             success = False
         else:
             for relation_key in expected_relation_keys:
-                self._stored.ceph_data[relation_key] = unit_data.get(relation_key)
+                self._stored.ceph_data[relation_key] = relation_data.get(relation_key)
             success = True
 
         return success
 
-    def _on_ceph_admin_joined(self, event: RelationJoinedEvent) -> None:
-        """Create necessary k8s resources when relation is formed with ceph-mon."""
-        self.check_required_relations()
-        if not self.unit.is_leader():
-            # Skip resource creation on non-leader unit
-            logger.info("Skipping Kubernetes resource creation from non-leader unit")
-            return
+    def request_ceph_pools(self) -> None:
+        """Request creation of Ceph pools from the ceph-client relation"""
+        for pool_name in self.REQUIRED_CEPH_POOLS:
+            self.ceph_client.create_replicated_pool(name=pool_name)
 
-        if self._stored.resources_created:
-            # Skip silently if other ceph_relation_joined event already
-            # created resources
-            return
+    def request_ceph_permissions(self) -> None:
+        """Request Ceph permissions from the ceph-client relation"""
+        # Permissions needed for Ceph CSI
+        # https://github.com/ceph/ceph-csi/blob/v3.6.0/docs/capabilities.md
+        permissions = [
+            "mon",
+            "profile rbd, allow r",
+            "mds",
+            "allow rw",
+            "mgr",
+            "allow rw",
+            "osd",
+            "profile rbd, allow rw tag cephfs metadata=*",
+        ]
+        self.ceph_client.request_ceph_permissions(self.app.name, permissions)
 
-        if self.safe_load_ceph_admin_data(event.relation, event.unit):
-            all_resources = self.render_all_resource_definitions()
-            self.create_ceph_resources(all_resources)
-            self._stored.resources_created = True
+    def _on_ceph_client_broker_available(self, event: RelationJoinedEvent) -> None:
+        """Use ceph-mon:client relation to request creation of ceph-pools and
+        ceph user permissions
+        """
+        self.request_ceph_pools()
+        self.request_ceph_permissions()
 
-    def _on_ceph_admin_changed(self, event: RelationChangedEvent) -> None:
-        self.check_required_relations()
+    def _on_ceph_client_changed(self, event: RelationChangedEvent) -> None:
+        """Fetch information from ceph-client relation and update Kubernetes
+        resources
+        """
         if not self.unit.is_leader():
             # Skip resource update on non-leader unit
             logger.info("Skipping Kubernetes resource update from non-leader unit")
             return
 
-        if self.safe_load_ceph_admin_data(event.relation, event.unit):
+        if self.safe_load_ceph_client_data():
+            self.configure_ceph_cli()
             if self._stored.resources_created:
-                # Update already existing resources that depend on ceph-admin data
-                secret_key = self.ceph_context["kubernetes_key"]
-                fsid = self.ceph_context["fsid"]
-                mon_hosts = self._stored.ceph_data.get("mon_hosts", "").split()
+                # Update already existing resources that depend on ceph-client data
+                secret_key = self.key
+                fsid = self.get_ceph_fsid()
+                mon_hosts = self.mon_hosts
 
                 for resource in self.resources:
                     if isinstance(resource, Secret):
@@ -382,33 +459,16 @@ class CephCsiCharm(CharmBase):
                         config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
                         resource.update_config_json(json.dumps(config_data, indent=4))
             else:
-                # No kubernetes resources exist yet. This is the first time that ceph-admin
+                # No kubernetes resources exist yet. This is the first time that ceph-client
                 # relation has all the required data
                 all_resources = self.render_all_resource_definitions()
                 self.create_ceph_resources(all_resources)
                 self._stored.resources_created = True
+            self.unit.status = UNIT_READY_STATUS
 
-    def _on_ceph_client_joined(self, event: RelationJoinedEvent) -> None:
-        """Use ceph-mon:client relation to request creation of ceph-pools."""
-        self.check_required_relations()
-        if not self.unit.is_leader():
-            # Don't request ceph pool creation from non-leader units
-            logger.info("Skipping Ceph pool creation requests from non-leader unit")
-            return
-
-        request = CephRequest(self.unit, event.relation)
-        for pool_name in self.REQUIRED_CEPH_POOLS:
-            pool = CreatePoolConfig(pool_name)
-            request.add_replicated_pool(pool)
-
-        request.execute()
-
-    def _on_ceph_client_removed(self, _: RelationDepartedEvent) -> None:
-        """Warn that ceph pools wont be automatically removed on ceph-mon:client departure.
-
-        There does not seem to be a functionality to request ceph pool removal from ceph broker in
-        a same way that there's a functionality to add one.
-        """
+    def _on_ceph_client_removed(self, event: RelationDepartedEvent) -> None:
+        """Remove resources when relation removed"""
+        self.purge_k8s_resources(event)
         ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
         logger.warning(
             "Ceph pools %s wont be removed. If you want to clean up pools manually, use juju "

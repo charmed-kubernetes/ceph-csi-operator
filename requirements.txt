@@ -2,3 +2,5 @@ ops >= 1.2.0
 kubernetes
 jinja2
 pyyaml
+git+https://opendev.org/openstack/charm-ops-interface-ceph-client@d4d0cefc5e92edd28cdbf5d00e190d4498896418#egg=interface_ceph_client
+netifaces

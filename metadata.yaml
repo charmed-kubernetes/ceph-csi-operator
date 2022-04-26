@@ -12,8 +12,6 @@ series:
   - bionic
   - xenial
 requires:
-  ceph-admin:
-    interface: ceph-admin
   ceph-client:
     interface: ceph-client
   kubernetes:
