@@ -7,7 +7,7 @@ on:
     branches: [ main ]
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: [ main, initial-implementation ]
+    branches: [ main ]
 
 jobs:
   lint-unittests:
