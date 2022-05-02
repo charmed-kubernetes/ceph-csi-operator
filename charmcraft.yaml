@@ -1,0 +1,8 @@
+type: charm
+parts:
+  charm:
+    charm-python-packages:
+      - setuptools  # for jinja2
+bases:
+- name: "ubuntu"
+  channel: "20.04"

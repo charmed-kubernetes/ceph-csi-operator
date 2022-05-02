@@ -5,6 +5,8 @@
 """Collection of tests related to src/charm.py"""
 
 import json
+import os
+import subprocess
 import unittest
 from resource import (
     ClusterRole,
@@ -22,6 +24,7 @@ from resource import (
 )
 from unittest.mock import MagicMock, PropertyMock, call, patch
 
+from interface_ceph_client.ceph_client import CephClientRequires
 from kubernetes.client import ApiException
 from ops.testing import Harness
 
@@ -31,7 +34,6 @@ from charm import (
     ActiveStatus,
     BlockedStatus,
     CephCsiCharm,
-    CreatePoolConfig,
     client,
     config,
     logger,
@@ -74,27 +76,76 @@ class TestCharm(unittest.TestCase):
         dict_copy = self.harness.charm.copy_stored_dict(self.harness.charm._stored.ceph_data)
         self.assertEqual(dict_copy, expected_dict)
 
+    def test_write_ceph_cli_config(self):
+        """Test writing of Ceph CLI config"""
+        self.harness.charm._stored.ceph_data["auth"] = "cephx"
+        self.harness.charm._stored.ceph_data["mon_hosts"] = ["10.0.0.1", "10.0.0.2"]
+        with patch("builtins.open"):
+            self.harness.charm.write_ceph_cli_config()
+            with open("/etc/ceph/ceph.conf", "w") as f:
+                f.write.assert_called_once_with(
+                    """[global]
+auth cluster required = cephx
+auth service required = cephx
+auth client required = cephx
+keyring = /etc/ceph/$cluster.$name.keyring
+mon host = 10.0.0.1 10.0.0.2
+
+log to syslog = true
+err to syslog = true
+clog to syslog = true
+mon cluster log to syslog = true
+debug mon = 1/5
+debug osd = 1/5
+
+[client]
+log file = /var/log/ceph.log
+"""
+                )
+
+    def test_write_ceph_cli_keyring(self):
+        """Test writing of Ceph CLI keyring file"""
+        self.harness.charm._stored.ceph_data["key"] = "12345"
+        with patch("builtins.open"):
+            self.harness.charm.write_ceph_cli_keyring()
+            with open("/etc/ceph/ceph.client.ceph-csi.keyring", "w") as f:
+                f.write.assert_called_once_with("[client.ceph-csi]\n\tkey = 12345\n")
+
+    def test_configure_ceph_cli(self):
+        """Test configuration of Ceph CLI"""
+        self.patch(os, "makedirs")
+        self.patch(CephCsiCharm, "write_ceph_cli_config")
+        self.patch(CephCsiCharm, "write_ceph_cli_keyring")
+        self.harness.charm.configure_ceph_cli()
+        os.makedirs.assert_called_once_with("/etc/ceph", exist_ok=True)
+        self.harness.charm.write_ceph_cli_config.assert_called_once()
+        self.harness.charm.write_ceph_cli_keyring.assert_called_once()
+
     def test_ceph_context_getter(self):
         """Test that ceph_context property returns properly formatted data."""
         fsid = "12345"
         key = "secret_key"
-        monitors = "10.0.0.1 10.0.0.2"
-        expected_monitors_format = json.dumps(monitors.split())
+        monitors = ["10.0.0.1", "10.0.0.2"]
+        expected_monitors_format = json.dumps(monitors)
 
-        # data from ceph-mon:admin relation
-        relation_data = {"fsid": fsid, "key": key, "mon_hosts": monitors}
+        # stored data from ceph-mon:client relation
+        self.harness.charm._stored.ceph_data["key"] = key
+        self.harness.charm._stored.ceph_data["mon_hosts"] = monitors
 
-        for id_, value in relation_data.items():
-            self.harness.charm._stored.ceph_data[id_] = value
+        self.patch(subprocess, "check_output").return_value = fsid.encode("UTF-8")
 
         # key and value format expected in context for Kubernetes templates.
         expected_context = {
             "fsid": fsid,
             "kubernetes_key": key,
             "mon_hosts": expected_monitors_format,
+            "user": "ceph-csi",
         }
 
         self.assertEqual(self.harness.charm.ceph_context, expected_context)
+        subprocess.check_output.assert_called_once_with(
+            ["ceph", "--user", "ceph-csi", "fsid"], timeout=60
+        )
 
     def test_k8s_resources_getter(self):
         """Test that property 'resources' returns expected list of resources"""
@@ -147,10 +198,14 @@ class TestCharm(unittest.TestCase):
 
     def test_install(self):
         """Test that on.install hook will call expected methods"""
+        self.patch(subprocess, "check_call")
         mock_relation_check = self.patch(CephCsiCharm, "check_required_relations")
         self.harness.charm.on.install.emit()
 
         mock_relation_check.assert_called_once_with()
+        self.assertEqual(subprocess.check_call.call_count, 2)
+        subprocess.check_call.assert_any_call(["apt-get", "update"])
+        subprocess.check_call.assert_any_call(["apt-get", "install", "-y", "ceph-common"])
 
     def test_required_relation_check(self):
         """Test that check_required_relations sets expected unit states."""
@@ -166,26 +221,6 @@ class TestCharm(unittest.TestCase):
 
         # Return None on any call, indicating that all required relations are  missing
         get_relation_mock.return_value = None
-        self.harness.charm.check_required_relations()
-
-        self.assertEqual(self.harness.charm.unit.status.name, "blocked")
-        self.assertEqual(
-            self.harness.charm.unit.status.message, "Missing relations: ceph-admin, ceph-client"
-        )
-
-        # Return None when requesting ceph-admin relation
-        get_relation_mock.side_effect = (
-            lambda rel: None if rel == CephCsiCharm.CEPH_ADMIN_RELATION else ""
-        )
-        self.harness.charm.check_required_relations()
-
-        self.assertEqual(self.harness.charm.unit.status.name, "blocked")
-        self.assertEqual(self.harness.charm.unit.status.message, "Missing relations: ceph-admin")
-
-        # Return None when requesting ceph-client relation
-        get_relation_mock.side_effect = (
-            lambda rel: None if rel == CephCsiCharm.CEPH_CLIENT_RELATION else ""
-        )
         self.harness.charm.check_required_relations()
 
         self.assertEqual(self.harness.charm.unit.status.name, "blocked")
@@ -214,6 +249,7 @@ class TestCharm(unittest.TestCase):
 
     def test_render_resources(self):
         """Test that yaml templates get properly serialized into dicts."""
+        self.patch(CephCsiCharm, "get_ceph_fsid").return_value = "12345"
         resources = self.harness.charm.render_resource_definitions()
         # Assert that all resources get properly unpacked to dictionaries
         self.assertTrue(all(isinstance(resource, dict) for resource in resources))
@@ -231,6 +267,7 @@ class TestCharm(unittest.TestCase):
                 else:
                     self.assertNotIn(default_attribute, annotation)
 
+        self.patch(CephCsiCharm, "get_ceph_fsid").return_value = "12345"
         self.patch(CephCsiCharm, "update_default_storage_class")
         xfs = self.harness.charm.XFS_STORAGE
         ext4 = self.harness.charm.EXT4_STORAGE
@@ -392,55 +429,100 @@ class TestCharm(unittest.TestCase):
 
         self.assertEqual(raised.exception, expected_exception)
 
-    def test_ceph_client_joined_leader(self):
-        """Test that ceph pool creation is requested when ceph-client relation is joined.
-
-        Note: Only leader unit is expected to make this request.
+    def test_ceph_client_broker_available(self):
+        """Test that when the ceph client broker is available, a pool is
+        requested and Ceph capabilities are requested
         """
-        expected_ops = [
-            CreatePoolConfig(pool).to_json() for pool in CephCsiCharm.REQUIRED_CEPH_POOLS
-        ]
+        self.patch(CephClientRequires, "create_replicated_pool")
+        self.patch(CephClientRequires, "request_ceph_permissions")
 
         # Setup charm
         harness = Harness(CephCsiCharm)
-        harness.set_leader(True)
         harness.begin()
 
         # add ceph-client relation
         relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
         harness.add_relation_unit(relation_id, "ceph-mon/0")
 
-        # parse data out of the relation
-        relation_data = harness.get_relation_data(relation_id, harness.charm.unit.name)
-        raw_broker_request = relation_data.get("broker_req", "{}")
-        broker_request = json.loads(raw_broker_request)
+        self.assertEqual(harness.charm.ceph_client.create_replicated_pool.call_count, 2)
+        harness.charm.ceph_client.create_replicated_pool.assert_any_call(name="ext4-pool")
+        harness.charm.ceph_client.create_replicated_pool.assert_any_call(name="xfs-pool")
+        harness.charm.ceph_client.request_ceph_permissions.assert_called_once_with(
+            "ceph-csi",
+            [
+                "mon",
+                "profile rbd, allow r",
+                "mds",
+                "allow rw",
+                "mgr",
+                "allow rw",
+                "osd",
+                "profile rbd, allow rw tag cephfs metadata=*",
+            ],
+        )
 
-        # Assert that requested operation matches expected ops
-        self.assertEqual(broker_request.get("ops"), expected_ops)
+    def test_ceph_client_relation_changed_leader(self):
+        """Test ceph-client-relation-changed hook on a leader unit"""
+        self.patch(CephCsiCharm, "configure_ceph_cli")
+        self.patch(CephCsiCharm, "get_ceph_fsid").return_value = "12345"
+        self.patch(CephCsiCharm, "create_ceph_resources")
+        self.harness.set_leader(True)
+        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        self.harness.add_relation_unit(relation_id, "ceph-mon/0")
 
-        # Assert that request contains expected header
-        self.assertIn("api-version", broker_request)
-        self.assertIn("request-id", broker_request)
+        self.harness.update_relation_data(
+            relation_id,
+            "ceph-mon/0",
+            {"auth": "cephx", "key": "12345", "ceph-public-address": "10.0.0.1"},
+        )
 
-    def test_ceph_client_joined_non_leader(self):
-        """Test that no action is performed on non-leader units when ceph-client rel. is joined."""
-        logger_mock = self.patch(logger, "info")
-        expected_log_msg = "Skipping Ceph pool creation requests from non-leader unit"
+        self.assertEqual(
+            self.harness.charm._stored.ceph_data,
+            {"auth": "cephx", "key": "12345", "mon_hosts": ["10.0.0.1"]},
+        )
+        expected_resources = self.harness.charm.render_all_resource_definitions()
+        self.harness.charm.create_ceph_resources.assert_called_once_with(expected_resources)
 
-        # Setup charm
-        harness = Harness(CephCsiCharm)
-        harness.set_leader(False)
-        harness.begin()
+    def test_ceph_client_relation_changed_leader_resources_created(self):
+        """Test ceph-client-relation-changed hook on a leader unit when
+        resources have already been created
+        """
+        self.patch(CephCsiCharm, "configure_ceph_cli")
+        self.patch(CephCsiCharm, "get_ceph_fsid").return_value = "abcde"
+        self.patch(ConfigMap, "update_config_json")
+        self.patch(Secret, "update_opaque_data")
+        self.patch(StorageClass, "update_cluster_id")
+        self.harness.charm._stored.resources_created = True
+        self.harness.set_leader(True)
+        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        self.harness.add_relation_unit(relation_id, "ceph-mon/0")
 
-        # add ceph-client relation
-        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-        harness.add_relation_unit(relation_id, "ceph-mon/0")
+        self.harness.update_relation_data(
+            relation_id,
+            "ceph-mon/0",
+            {"auth": "cephx", "key": "12345", "ceph-public-address": "10.0.0.1"},
+        )
 
-        relation_data = harness.get_relation_data(relation_id, harness.charm.unit.name)
-        broker_request = relation_data.get("broker_req", None)
+        self.assertEqual(
+            self.harness.charm._stored.ceph_data,
+            {"auth": "cephx", "key": "12345", "mon_hosts": ["10.0.0.1"]},
+        )
+        Secret.update_opaque_data.assert_called_once_with("userKey", "12345")
+        StorageClass.update_cluster_id.assert_called_with("abcde")
+        ConfigMap.update_config_json.assert_called_with(
+            json.dumps([{"clusterID": "abcde", "monitors": ["10.0.0.1"]}], indent=4)
+        )
 
-        self.assertIsNone(broker_request)
-        logger_mock.assert_called_once_with(expected_log_msg)
+    def test_ceph_client_relation_changed_non_leader(self):
+        self.harness.set_leader(False)
+        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        self.harness.add_relation_unit(relation_id, "ceph-mon/0")
+        self.harness.update_relation_data(
+            relation_id,
+            "ceph-mon/0",
+            {"auth": "cephx", "key": "12345", "ceph-public-address": "10.0.0.1"},
+        )
+        self.assertEqual(self.harness.charm._stored.ceph_data, {})
 
     def test_ceph_client_relation_departed(self):
         """Test that warning is logged about ceph-pools not being cleaned up after rel. removal."""
@@ -457,30 +539,25 @@ class TestCharm(unittest.TestCase):
 
         logger_mock.assert_called_with(expected_msg, pools)
 
-    def test_safe_load_ceph_admin_data(self):
+    def test_safe_load_ceph_client_data(self):
         """Test that `safe_load_ceph_admin_data` method loads data properly.
 
         Data are expected to be stored in the StoredState only if all the required keys are present
         in the relation data.
         """
-        relation_mock = MagicMock()
-        ceph_mon_unit = MagicMock()
-        ceph_mon_unit.name = "ceph-mon/0"
-
-        ceph_mons = "10.0.0.1, 10.0.0.2"
-        fsid = "foo"
+        auth = "cephx"
         key = "bar"
-        relation_data = {"fsid": fsid, "key": key, "mon_hosts": ceph_mons}
+        ceph_mons = ["10.0.0.1", "10.0.0.2"]
+        relation_data = {"auth": auth, "key": key, "mon_hosts": ceph_mons}
+        self.patch(CephClientRequires, "get_relation_data").return_value = relation_data
 
-        # setup relation data
         self.harness.set_leader(True)
-        relation_mock.data = {ceph_mon_unit: relation_data}
 
         # All data should be loaded
-        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+        result = self.harness.charm.safe_load_ceph_client_data()
 
         self.assertTrue(result)
-        self.assertEqual(self.harness.charm._stored.ceph_data["fsid"], fsid)
+        self.assertEqual(self.harness.charm._stored.ceph_data["auth"], auth)
         self.assertEqual(self.harness.charm._stored.ceph_data["key"], key)
         self.assertEqual(self.harness.charm._stored.ceph_data["mon_hosts"], ceph_mons)
 
@@ -488,134 +565,21 @@ class TestCharm(unittest.TestCase):
         self.harness.charm._stored.ceph_data = {}
 
         # don't load anything if relation data is missing
-        relation_mock.data[ceph_mon_unit].pop("mon_hosts")
+        CephClientRequires.get_relation_data.return_value = {"auth": auth, "key": key}
 
-        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+        result = self.harness.charm.safe_load_ceph_client_data()
         self.assertFalse(result)
-        self.assertNotIn("fsid", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("auth", self.harness.charm._stored.ceph_data)
         self.assertNotIn("key", self.harness.charm._stored.ceph_data)
         self.assertNotIn("mon_hosts", self.harness.charm._stored.ceph_data)
 
         # don't execute anything on non-leader unit
         self.harness.set_leader(False)
-        relation_mock.data[ceph_mon_unit] = relation_data
+        CephClientRequires.get_relation_data.return_value = relation_data
 
-        result = self.harness.charm.safe_load_ceph_admin_data(relation_mock, ceph_mon_unit)
+        result = self.harness.charm.safe_load_ceph_client_data()
 
         self.assertIs(result, None)
-        self.assertNotIn("fsid", self.harness.charm._stored.ceph_data)
+        self.assertNotIn("auth", self.harness.charm._stored.ceph_data)
         self.assertNotIn("key", self.harness.charm._stored.ceph_data)
         self.assertNotIn("mon_hosts", self.harness.charm._stored.ceph_data)
-
-    def test_ceph_admin_joined_triggered(self):
-        """Test that new "ceph-mon:admin" relation triggers `_on_ceph_admin_joined`."""
-        on_admin_joined_mock = self.patch(CephCsiCharm, "_on_ceph_admin_joined")
-
-        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_ADMIN_RELATION, "ceph-mon")
-        self.harness.add_relation_unit(relation_id, "ceph-mon/0")
-
-        self.assertEqual(on_admin_joined_mock.call_count, 1)
-
-    def test_ceph_admin_joined_non_leader(self):
-        """Test that `_on_ceph_admin_joined` method is not executed on non-leader units."""
-        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
-        logger_mock = self.patch(logger, "info")
-        expected_log_msg = "Skipping Kubernetes resource creation from non-leader unit"
-        event_mock = MagicMock()
-
-        self.harness.set_leader(False)
-        self.harness.charm._stored.resources_created = False
-
-        self.harness.charm._on_ceph_admin_joined(event_mock)
-
-        logger_mock.assert_called_once_with(expected_log_msg)
-        load_data_mock.assert_not_called()
-
-    def test_ceph_admin_joined_resources_created(self):
-        """Test that if resources are already created, `_on_ceph_admin_joined` has no effect."""
-        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
-        event_mock = MagicMock()
-
-        self.harness.set_leader(True)
-        self.harness.charm._stored.resources_created = True
-
-        self.harness.charm._on_ceph_admin_joined(event_mock)
-
-        load_data_mock.assert_not_called()
-
-    def test_ceph_admin_joined_creates_resources(self):
-        """Test that leader unit creates k8s resources on ceph-mon:admin relation joined."""
-        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
-        create_resources_mock = self.patch(CephCsiCharm, "create_ceph_resources")
-        expected_resources = self.harness.charm.render_all_resource_definitions()
-        self.harness.set_leader(True)
-
-        self.harness.charm._on_ceph_admin_joined(MagicMock())
-
-        create_resources_mock.assert_called_once_with(expected_resources)
-        self.assertTrue(self.harness.charm._stored.resources_created)
-
-    def test_ceph_admin_changed_triggered(self):
-        """Test that change in ceph-mon:admin relation triggers `on_ceph_admin_changed`."""
-        on_admin_changed_mock = self.patch(CephCsiCharm, "_on_ceph_admin_changed")
-        ceph_unit = "ceph-mon/0"
-
-        relation_id = self.harness.add_relation(CephCsiCharm.CEPH_ADMIN_RELATION, "ceph-mon")
-        self.harness.add_relation_unit(relation_id, ceph_unit)
-
-        self.harness.update_relation_data(relation_id, ceph_unit, {"foo": "bar"})
-        self.assertEqual(on_admin_changed_mock.call_count, 1)
-
-    def test_ceph_admin_changed_non_leader(self):
-        """Test that `_on_ceph_admin_changed` does not perform any action on non-leader unit."""
-        load_data_mock = self.patch(CephCsiCharm, "safe_load_ceph_admin_data")
-        logger_mock = self.patch(logger, "info")
-        expected_message = "Skipping Kubernetes resource update from non-leader unit"
-
-        self.harness.set_leader(False)
-
-        self.harness.charm._on_ceph_admin_changed(MagicMock())
-
-        logger_mock.assert_called_once_with(expected_message)
-        load_data_mock.assert_not_called()
-
-    def test_ceph_admin_changed_resource_created(self):
-        """Test that all resources are created if no resources were created yet.
-
-        `_on_ceph_admin_changed` is expected to act similar to `_on_ceph_admin_joined`, and create
-        all the resources if no resources were created yet. This occurs when none of the relations
-        with ceph-mon unit had all the expected data on joining.
-        """
-        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
-        create_resources_mock = self.patch(CephCsiCharm, "create_ceph_resources")
-        expected_resources = self.harness.charm.render_all_resource_definitions()
-        self.harness.set_leader(True)
-
-        self.harness.charm._on_ceph_admin_changed(MagicMock())
-
-        create_resources_mock.assert_called_once_with(expected_resources)
-        self.assertTrue(self.harness.charm._stored.resources_created)
-
-    def test_ceph_admin_changed_resource_update(self):
-        """Test that resources are updated on change in ceph-mon:admin relation."""
-        ceph_mons = "10.0.0.1 10.0.0.2"
-        fsid = "foo"
-        key = "bar"
-        ceph_context_mock = {"fsid": fsid, "kubernetes_key": key, "mon_hosts": ceph_mons}
-        expected_config_map_update = [{"clusterID": fsid, "monitors": ceph_mons.split()}]
-
-        secret_mock = self.patch(Secret, "update_opaque_data")
-        storage_class_mock = self.patch(StorageClass, "update_cluster_id")
-        config_map_mock = self.patch(ConfigMap, "update_config_json")
-
-        self.patch_property(CephCsiCharm, "ceph_context").return_value = ceph_context_mock
-        self.patch(CephCsiCharm, "safe_load_ceph_admin_data").return_value = True
-        self.harness.charm._stored.ceph_data["mon_hosts"] = ceph_mons
-        self.harness.set_leader(True)
-        self.harness.charm._stored.resources_created = True
-
-        self.harness.charm._on_ceph_admin_changed(MagicMock())
-
-        secret_mock.assert_called_with("userKey", key)
-        storage_class_mock.assert_called_with(fsid)
-        config_map_mock.assert_called_with(json.dumps(expected_config_map_update, indent=4))
