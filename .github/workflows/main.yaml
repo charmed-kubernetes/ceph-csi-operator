@@ -4,10 +4,10 @@ name: Linters and Unit tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: [ master, initial-implementation ]
+    branches: [ main, initial-implementation ]
 
 jobs:
   lint-unittests:
