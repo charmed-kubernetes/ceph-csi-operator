@@ -9,6 +9,7 @@ summary: |
   enables Charmed Kubernetes (CDK) to use ceph as a storage backend.
 series:
   - focal
+  - jammy
   - bionic
   - xenial
 requires:
