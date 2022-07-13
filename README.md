@@ -2,18 +2,18 @@
 
 ## Description
 
-This is a subordinate charm of [kubernetes-master][1], deployed as part of the
-[Charmed Kubernetes][2] and enables Kubernetes cluster to use Ceph as a
-storage. Currently supported storage options are `ceph-xfs` and `ceph-ext4`
+This is a subordinate charm of [kubernetes-control-plane][1], deployed as part of
+[Charmed Kubernetes][2] and enables a Kubernetes cluster to use Ceph as a
+storage backend. Currently supported storage options are `ceph-xfs` and `ceph-ext4`
 with `cephfs` being work in progress.
 
 **__Note:__** This charm creates various Kubernetes resources, including pods.
 Therefore it requires `kubernetes-master` to run in privileged mode (config
-option `allow-privileged=true`) 
+option `allow-privileged=true`)
 
 ## Usage
 
-Since this charm is not published in charmstore yet, it needs to be built from
+Since this charm is not published in charmhub yet, it needs to be built from
 source.
 
     $ charmcraft pack  # This will produce `ceph-csi.charm`
@@ -22,22 +22,22 @@ As this charm has no standalone functionality, we'll need `Kubernetes` and
 `Ceph` cluster first.
 
     $ juju deploy charmed-kubernetes
-    $ juju config kubernetes-master allow-privileged=true
+    $ juju config kubernetes-control-plane allow-privileged=true
     $ juju deploy -n 3 ceph-mon
     $ juju deploy -n 3 ceph-osd
     $ juju add-relation ceph-osd ceph-mon
-    
+
 Once the deployment settled, We can add `ceph-csi`
 
     $ juju deploy ./ceph-csi.charm
-    $ juju add-relation ceph-csi kubernetes-master
+    $ juju add-relation ceph-csi kubernetes-control-plane
     $ juju add-relation ceph-csi ceph-mon
-    
+
 
 ## Warning: Removal
 
-When `ceph-csi` charm is removed, it will not clean up Ceph pools that were
-created when relation with `ceph-mon:client` was joined. Interface of
+When the `ceph-csi` charm is removed, it will not clean up Ceph pools that were
+created when the relation with `ceph-mon:client` was joined. The interface of
 `ceph-mon:client` does not seem to offer a "removal" functionality. If you
 wish to remove ceph pools, use `delete-pool` action of `ceph-mon unit`.
 
@@ -55,8 +55,8 @@ The Python operator framework includes a very nice harness for testing
 operator behaviour without full deployment. To execute unit tests, run:
 
     $ tox -e unit
-    
-This charm contains also functional tests which fully deploy `ceph-csi` charm 
+
+This charm contains functional tests which fully deploy the `ceph-csi` charm
 along with `kubernetes` and `ceph` cluster to test its functionality in a real
 environment. There are a few ways to run functional tests
 
@@ -72,5 +72,5 @@ Kubernetes might have problem fetching docker images. Example:
     $ export TEST_HTTPS_PROXY=http://10.0.0.1:3128
     $ tox -e func
 
-[1]: https://charmhub.io/containers-kubernetes-master
+[1]: https://charmhub.io/kubernetes-control-plane
 [2]: https://charmhub.io/charmed-kubernetes
