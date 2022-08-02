@@ -13,11 +13,6 @@ option `allow-privileged=true`)
 
 ## Usage
 
-Since this charm is not published in charmhub yet, it needs to be built from
-source.
-
-    $ charmcraft pack  # This will produce `ceph-csi.charm`
-
 As this charm has no standalone functionality, we'll need `Kubernetes` and
 `Ceph` cluster first.
 
@@ -29,7 +24,7 @@ As this charm has no standalone functionality, we'll need `Kubernetes` and
 
 Once the deployment settled, We can add `ceph-csi`
 
-    $ juju deploy ./ceph-csi.charm
+    $ juju deploy ceph-csi
     $ juju add-relation ceph-csi kubernetes-control-plane
     $ juju add-relation ceph-csi ceph-mon
 
