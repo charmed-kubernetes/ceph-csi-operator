@@ -1,6 +1,7 @@
 type: charm
 parts:
   charm:
+    build-packages: [git]
     charm-python-packages:
       - setuptools  # for jinja2
 bases:

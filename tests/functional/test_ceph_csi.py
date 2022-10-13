@@ -7,6 +7,7 @@
 import logging
 from os import environ
 from pathlib import Path
+import shlex
 from uuid import uuid4
 
 import pytest
@@ -28,21 +29,36 @@ SUCCESS_POD_STATE = "Succeeded"
 @pytest.mark.abort_on_fail
 async def test_build_and_deploy(ops_test):
     """Build ceph-csi charm and deploy testing model."""
-    logger.info("Building ceph-csi charm.")
-    ceph_csi_charm = await ops_test.build_charm(".")
+    charm = next(Path(".").glob("ceph-csi*.charm"), None)
+    if not charm:
+        logger.info("Building ceph-csi charm.")
+        charm = await ops_test.build_charm(".")
 
-    bundle_vars = {"master_charm": ceph_csi_charm}
+    bundle_vars = {"charm": charm.resolve()}
     proxy_settings = environ.get("TEST_HTTPS_PROXY")
     if proxy_settings:
         bundle_vars["https_proxy"] = proxy_settings
 
+    overlays = [
+        ops_test.Bundle("kubernetes-core", channel="edge"),
+        Path("tests/functional/overlay.yaml"),
+    ]
+
+    bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
+
     logger.debug("Deploying ceph-csi functional test bundle.")
-    await ops_test.model.deploy(
-        ops_test.render_bundle("tests/functional/bundle.yaml", **bundle_vars)
+    model = ops_test.model_full_name
+    cmd = f"juju deploy -m {model} {bundle} " + " ".join(
+        f"--overlay={f}" for f in overlays
     )
-    await ops_test.model.wait_for_idle(
-        wait_for_active=True, timeout=60 * 60, check_freq=5, raise_on_error=False
+    rc, stdout, stderr = await ops_test.run(*shlex.split(cmd))
+    assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
+    logger.info(stdout)
+
+    await ops_test.model.block_until(
+        lambda: "ceph-csi" in ops_test.model.applications, timeout=60
     )
+    await ops_test.model.wait_for_idle(wait_for_active=True, timeout=60 * 60, check_freq=5)
 
 
 async def test_active_status(ops_test: OpsTest):
