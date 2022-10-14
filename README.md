@@ -8,7 +8,7 @@ storage backend. Currently supported storage options are `ceph-xfs` and `ceph-ex
 with `cephfs` being work in progress.
 
 **__Note:__** This charm creates various Kubernetes resources, including pods.
-Therefore it requires `kubernetes-master` to run in privileged mode (config
+Therefore it requires `kubernetes-control-plane` to run in privileged mode (config
 option `allow-privileged=true`)
 
 ## Usage

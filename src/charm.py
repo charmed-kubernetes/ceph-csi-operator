@@ -34,6 +34,7 @@ from resource import (
 )
 from typing import Any, Callable, Dict, List, Optional, cast
 
+import urllib3.exceptions
 import yaml
 from interface_ceph_client import ceph_client  # type: ignore
 from jinja2 import Environment, FileSystemLoader
@@ -466,7 +467,17 @@ log file = /var/log/ceph.log
                 # No kubernetes resources exist yet. This is the first time that ceph-client
                 # relation has all the required data
                 all_resources = self.render_all_resource_definitions()
-                self.create_ceph_resources(all_resources)
+                try:
+                    self.create_ceph_resources(all_resources)
+                except config.ConfigException:
+                    logger.info("KubeConfig not yet ready...")
+                    event.defer()
+                    return
+                except urllib3.exceptions.HTTPError:
+                    logger.info("ControlPlane not yet ready...")
+                    event.defer()
+                    return
+
                 self._stored.resources_created = True
             self.unit.status = UNIT_READY_STATUS
 

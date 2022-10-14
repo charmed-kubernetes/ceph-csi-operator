@@ -6,6 +6,7 @@
 
 import logging
 import shlex
+from operator import is_
 from os import environ
 from pathlib import Path
 from uuid import uuid4
@@ -132,7 +133,10 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
     logger.debug("Discovering available StorageClasses")
     for storage_class in storage_api.list_storage_class().items:
         name = storage_class.metadata.name
-        is_default = storage_class.metadata.annotations[default_property]
+        if annotations := storage_class.metadata.annotations:
+            is_default = annotations.get(default_property) == "true"
+        else:
+            is_default = False
         classes_to_test.append(name)
         logger.debug("StorageClass: %s; isDefault: %s", name, is_default)
 
