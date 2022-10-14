@@ -24,6 +24,7 @@ from resource import (
 )
 from unittest.mock import MagicMock, PropertyMock, call, patch
 
+import urllib3.exceptions
 from interface_ceph_client.ceph_client import CephClientRequires
 from kubernetes.client import ApiException
 from ops.testing import Harness
@@ -120,6 +121,23 @@ log file = /var/log/ceph.log
         os.makedirs.assert_called_once_with("/etc/ceph", exist_ok=True)
         self.harness.charm.write_ceph_cli_config.assert_called_once()
         self.harness.charm.write_ceph_cli_keyring.assert_called_once()
+
+    def test_ceph_client_changed_deferred(self):
+        event = MagicMock()
+        self.harness.charm._stored.resources_created = False
+        self.harness.set_leader(True)
+        self.patch(self.harness.charm, "configure_ceph_cli")
+        self.patch(self.harness.charm, "render_all_resource_definitions")
+        self.patch(self.harness.charm, "safe_load_ceph_client_data").return_value = True
+
+        failures = [config.ConfigException, urllib3.exceptions.HTTPError]
+
+        for failure in failures:
+            self.patch(self.harness.charm, "create_ceph_resources").side_effect = failure
+            self.harness.charm._on_ceph_client_changed(event)
+            event.defer.assert_called_once_with()
+            event.reset_mock()
+            assert not self.harness.charm._stored.resources_created
 
     def test_ceph_context_getter(self):
         """Test that ceph_context property returns properly formatted data."""
