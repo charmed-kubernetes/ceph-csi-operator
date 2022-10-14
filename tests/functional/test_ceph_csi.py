@@ -132,7 +132,8 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
     logger.debug("Discovering available StorageClasses")
     for storage_class in storage_api.list_storage_class().items:
         name = storage_class.metadata.name
-        if annotations := storage_class.metadata.annotations:
+        annotations = storage_class.metadata.annotations
+        if annotations:
             is_default = annotations.get(default_property) == "true"
         else:
             is_default = False
