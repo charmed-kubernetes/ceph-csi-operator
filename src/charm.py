@@ -32,7 +32,7 @@ from resource import (
     ServiceAccount,
     StorageClass,
 )
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import yaml
 from interface_ceph_client import ceph_client  # type: ignore
@@ -128,19 +128,23 @@ class CephCsiCharm(CharmBase):
         return dict(stored_dict.items())
 
     @property
-    def auth(self) -> str:
-        """Return stored Ceph auth mode from ceph-client relation"""
-        return self._stored.ceph_data.get("auth")
+    def _ceph_data(self) -> Dict[str, Any]:
+        return cast(Dict[str, Any], self._stored.ceph_data)
 
     @property
-    def key(self) -> str:
+    def auth(self) -> Optional[str]:
+        """Return stored Ceph auth mode from ceph-client relation"""
+        return self._ceph_data.get("auth")
+
+    @property
+    def key(self) -> Optional[str]:
         """Return stored Ceph key from ceph-client relation"""
-        return self._stored.ceph_data.get("key")
+        return self._ceph_data.get("key")
 
     @property
     def mon_hosts(self) -> List[str]:
         """Return stored Ceph monitor hosts from ceph-client relation"""
-        return list(self._stored.ceph_data.get("mon_hosts", []))
+        return list(self._ceph_data.get("mon_hosts", []))
 
     def install_ceph_common(self) -> None:
         """Install ceph-common apt package"""
@@ -195,7 +199,7 @@ log file = /var/log/ceph.log
         return fsid
 
     @property
-    def ceph_context(self) -> Dict[str, str]:
+    def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
             "fsid": self.get_ceph_fsid(),
@@ -263,7 +267,7 @@ log file = /var/log/ceph.log
         :return: True if value change otherwise False
         """
         new_value = self.config.get(config_name)
-        old_value = self._stored.__getattr__(stored_state_name)
+        old_value = getattr(self._stored, stored_state_name)
 
         if old_value != new_value:
             logger.info("Updating stored state: %s=%s", stored_state_name, new_value)
@@ -400,7 +404,7 @@ log file = /var/log/ceph.log
             success = False
         else:
             for relation_key in expected_relation_keys:
-                self._stored.ceph_data[relation_key] = relation_data.get(relation_key)
+                self._ceph_data[relation_key] = relation_data.get(relation_key)
             success = True
 
         return success
@@ -444,9 +448,9 @@ log file = /var/log/ceph.log
 
         if self.safe_load_ceph_client_data():
             self.configure_ceph_cli()
-            if self._stored.resources_created:
+            if cast(bool, self._stored.resources_created):
                 # Update already existing resources that depend on ceph-client data
-                secret_key = self.key
+                secret_key = self.key or ""
                 fsid = self.get_ceph_fsid()
                 mon_hosts = self.mon_hosts
 

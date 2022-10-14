@@ -28,8 +28,6 @@ applications:
       osd-journals: 1G,1
   ceph-csi:
     charm: {{ charm }}
-    options:
-      deploy-namespace: ceph-csi
 relations:
 - - ceph-osd
   - ceph-mon

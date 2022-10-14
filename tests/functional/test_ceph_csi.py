@@ -5,9 +5,9 @@
 """Functional tests for ceph-csi charm."""
 
 import logging
+import shlex
 from os import environ
 from pathlib import Path
-import shlex
 from uuid import uuid4
 
 import pytest
@@ -48,16 +48,12 @@ async def test_build_and_deploy(ops_test):
 
     logger.debug("Deploying ceph-csi functional test bundle.")
     model = ops_test.model_full_name
-    cmd = f"juju deploy -m {model} {bundle} " + " ".join(
-        f"--overlay={f}" for f in overlays
-    )
+    cmd = f"juju deploy -m {model} {bundle} " + " ".join(f"--overlay={f}" for f in overlays)
     rc, stdout, stderr = await ops_test.run(*shlex.split(cmd))
     assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
     logger.info(stdout)
 
-    await ops_test.model.block_until(
-        lambda: "ceph-csi" in ops_test.model.applications, timeout=60
-    )
+    await ops_test.model.block_until(lambda: "ceph-csi" in ops_test.model.applications, timeout=60)
     await ops_test.model.wait_for_idle(wait_for_active=True, timeout=60 * 60, check_freq=5)
 
 
