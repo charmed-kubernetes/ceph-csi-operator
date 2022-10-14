@@ -43,7 +43,7 @@ spec:
       priorityClassName: system-cluster-critical
       containers:
         - name: csi-provisioner
-          image: {{ registry|default('k8s.gcr.io') }}/sig-storage/csi-provisioner:v2.0.4
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-provisioner:v2.0.4
           args:
             - "--csi-address=$(ADDRESS)"
             - "--v=5"
@@ -63,7 +63,7 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-snapshotter
-          image: {{ registry|default('k8s.gcr.io') }}/sig-storage/csi-snapshotter:v4.0.0
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-snapshotter:v4.0.0
           args:
             - "--csi-address=$(ADDRESS)"
             - "--v=5"
@@ -79,7 +79,7 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-attacher
-          image: {{ registry|default('k8s.gcr.io') }}/sig-storage/csi-attacher:v3.0.2
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-attacher:v3.0.2
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
@@ -93,7 +93,7 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-resizer
-          image: {{ registry|default('k8s.gcr.io') }}/sig-storage/csi-resizer:v1.0.1
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-resizer:v1.0.1
           args:
             - "--csi-address=$(ADDRESS)"
             - "--v=5"
@@ -114,7 +114,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
           # for stable functionality replace canary with latest release version
-          image: {{ registry|default('quay.io') }}/cephcsi/cephcsi:v3.3.1
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.3.1
           args:
             - "--nodeid=$(NODE_ID)"
             - "--type=rbd"
@@ -165,7 +165,7 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
           # for stable functionality replace canary with latest release version
-          image: {{ registry|default('quay.io') }}/cephcsi/cephcsi:v3.3.1
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.3.1
           args:
             - "--type=controller"
             - "--v=5"
@@ -183,7 +183,7 @@ spec:
             - name: keys-tmp-dir
               mountPath: /tmp/csi/keys
         - name: liveness-prometheus
-          image: {{ registry|default('quay.io') }}/cephcsi/cephcsi:v3.3.1
+          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.3.1
           args:
             - "--type=liveness"
             - "--endpoint=$(CSI_ENDPOINT)"
