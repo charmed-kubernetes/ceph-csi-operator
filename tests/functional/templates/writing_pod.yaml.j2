@@ -10,8 +10,8 @@ spec:
       readOnly: false
   containers:
     - name: write-test-{{ storage_class }}
-      #  Amazon registry is used because we were hitting rate limits in dockerhub
-      image: public.ecr.aws/ubuntu/ubuntu:latest
+      #  rocks registry is used because we were hitting rate limits in dockerhub
+      image: rocks.canonical.com:443/cdk/ubuntu:jammy
       command: ["/bin/bash", "-c", "echo '{{ data }}' > /data/juju"]
       volumeMounts:
       - name: shared-data
