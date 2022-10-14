@@ -6,7 +6,6 @@
 
 import logging
 import shlex
-from operator import is_
 from os import environ
 from pathlib import Path
 from uuid import uuid4
