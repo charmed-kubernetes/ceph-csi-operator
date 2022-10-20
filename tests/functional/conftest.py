@@ -24,17 +24,15 @@ def namespace() -> str:
 async def kube_config(ops_test: OpsTest) -> Path:
     """Return path to the kube config of the tested Kubernetes cluster.
 
-    Config file is fetched from kubernetes-master unit and stored in the temporary file.
+    Config file is fetched from kubernetes-control-plane unit and stored in the temporary file.
     """
-    k8s_master = ops_test.model.applications["kubernetes-master"].units[0]
+    k8s_cp = ops_test.model.applications["kubernetes-control-plane"].units[0]
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         kube_config_file = Path(tmp_dir).joinpath("kube_config")
-        # This split is needed because `model_name` gets reported in format "<controller>:<model>"
-        model_name = ops_test.model_name.split(":", maxsplit=1)[-1]
 
         cmd = "juju scp -m {} {}:config {}".format(
-            model_name, k8s_master.name, kube_config_file
+            ops_test.model_name, k8s_cp.name, kube_config_file
         ).split()
         return_code, _, std_err = await ops_test.run(*cmd)
         assert return_code == 0, std_err

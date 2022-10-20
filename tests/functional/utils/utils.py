@@ -3,12 +3,14 @@
 """Various helper functions used by functional tests."""
 
 import logging
+import pprint
 from typing import Any
 
 import pytest
 import yaml
 from jinja2 import Environment, FileSystemLoader
 from kubernetes import client, watch
+from kubernetes.client.models import EventsV1EventList
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,15 @@ def wait_for_pod(
         if pod_state == target_state:
             break
     else:
+        logger.info(f"Pod failed to start within allotted timeout: '{timeout}s'")
+        events: EventsV1EventList = core_api.list_namespaced_event(
+            namespace, field_selector=f"involvedObject.name={name}"
+        )
+        for event in events.items:
+            event_interest = ", ".join(
+                [event.type, event.reason, pprint.pformat(event.source), event.message]
+            )
+            logger.info(event_interest)
         pytest.fail(
             "Timeout after {}s while waiting for {} pod to reach {} status".format(
                 timeout, name, target_state

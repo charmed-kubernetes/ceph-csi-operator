@@ -1,0 +1,37 @@
+description: Overlay for attaching current charm
+applications:
+  {% if https_proxy %}
+  containerd:
+    options:
+      https_proxy: {{ https_proxy }}
+  {% endif %}
+  kubernetes-control-plane:
+    options:
+      allow-privileged: "true"
+  kubernetes-worker:
+    expose: true
+  ceph-mon:
+    charm: ceph-mon
+    channel: "pacific/stable"
+    num_units: 3
+    options:
+      monitor-count: '3'
+  ceph-osd:
+    charm: ceph-osd
+    channel: "pacific/stable"
+    num_units: 3
+    constraints: "cores=2 mem=4G"
+    options:
+      osd-devices: /srv/osd
+    storage:
+      osd-devices: 1G,2
+      osd-journals: 1G,1
+  ceph-csi:
+    charm: {{ charm }}
+relations:
+- - ceph-osd
+  - ceph-mon
+- - ceph-csi
+  - kubernetes-control-plane
+- - ceph-csi
+  - ceph-mon:client
