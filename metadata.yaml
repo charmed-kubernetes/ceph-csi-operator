@@ -8,9 +8,8 @@ summary: |
   This (machine) charm deploys Container Storage Interface (CSI) plugin that
   enables Charmed Kubernetes (CK) to use ceph as a storage backend.
 series:
-  - focal
   - jammy
-  - bionic
+  - focal
 requires:
   ceph-client:
     interface: ceph-client
