@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 from functools import wraps
+from pathlib import Path
 from resource import (
     ClusterRole,
     ClusterRoleBinding,
@@ -351,6 +352,11 @@ log file = /var/log/ceph.log
 
         return storage_classes
 
+    @property
+    def manifest_version(self) -> str:
+        """Read the manifest version from templates."""
+        return Path(self.template_dir, "version.txt").read_text().strip()
+
     def render_all_resource_definitions(self) -> List[Dict]:
         """Render all resources required for ceph-csi."""
         return self.render_resource_definitions() + self.render_storage_definitions()
@@ -479,6 +485,7 @@ log file = /var/log/ceph.log
                     return
 
                 self._stored.resources_created = True
+            self.app.status = ActiveStatus(self.manifest_version)
             self.unit.status = UNIT_READY_STATUS
 
     def _on_ceph_client_removed(self, event: RelationDepartedEvent) -> None:
