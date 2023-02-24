@@ -20,7 +20,7 @@ apiVersion: apps/v1
 metadata:
   name: csi-rbdplugin-provisioner
 spec:
-  replicas: 3
+  replicas: {{ provisioner_replicas or 3 }}
   selector:
     matchLabels:
       app: csi-rbdplugin-provisioner

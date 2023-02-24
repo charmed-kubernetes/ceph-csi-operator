@@ -307,6 +307,14 @@ class Deployment(AppsResource):
     def _remove_namespaced_action(self) -> Callable:
         return self.api.delete_namespaced_deployment
 
+    @property
+    def _update_namespaced_action(self) -> Callable:
+        return self.api.patch_namespaced_deployment
+
+    def update_replicas(self, count: int) -> None:
+        """Update replicas value."""
+        self.update({"spec": {"replicas": count}})
+
 
 class DaemonSet(AppsResource):
     """Kubernetes 'DaemonSet' resource."""
