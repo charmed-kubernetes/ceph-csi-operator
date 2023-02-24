@@ -71,7 +71,9 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
     k8s_workers = ops_test.model.applications["kubernetes-worker"]
     assert rbdplugin.status.replicas == 2  # from the test overlay.yaml
-    assert rbdplugin.status.ready_replicas == len(k8s_workers.units)
+    # Due to anti-affinity rules on the control-plane, the ready replicas
+    # are limited to the number of worker nodes
+    assert rbdplugin.status.ready_replicas <= len(k8s_workers.units)
 
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
