@@ -8,9 +8,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Setup Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v4
         with:
           python-version: 3.8
       - name: Setup operator environment
@@ -20,10 +20,12 @@ jobs:
           credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"
-          bootstrap-options: "${{ secrets.FOCAL_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
+          bootstrap-options: "${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
           juju-channel: "3.1/stable"
+
       - name: Run test
-        run: tox -e func
+        run: tox -e func -- --basetemp=/home/ubuntu/pytest
+
       - name: Setup Debug Artifact Collection
         if: ${{ failure() }}
         run: mkdir tmp

@@ -12,13 +12,13 @@ applications:
     expose: true
   ceph-mon:
     charm: ceph-mon
-    channel: "pacific/stable"
+    channel: "quincy/stable"
     num_units: 3
     options:
       monitor-count: '3'
   ceph-osd:
     charm: ceph-osd
-    channel: "pacific/stable"
+    channel: "quincy/stable"
     num_units: 3
     constraints: "cores=2 mem=4G"
     options:
@@ -28,6 +28,8 @@ applications:
       osd-journals: 1G,1
   ceph-csi:
     charm: {{ charm }}
+    options:
+      provisioner-replicas: 2
 relations:
 - - ceph-osd
   - ceph-mon
