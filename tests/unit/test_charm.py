@@ -158,6 +158,7 @@ log file = /var/log/ceph.log
             "kubernetes_key": key,
             "mon_hosts": expected_monitors_format,
             "user": "ceph-csi",
+            "provisioner_replicas": 3,
         }
 
         self.assertEqual(self.harness.charm.ceph_context, expected_context)
@@ -510,6 +511,7 @@ log file = /var/log/ceph.log
         self.patch(ConfigMap, "update_config_json")
         self.patch(Secret, "update_opaque_data")
         self.patch(StorageClass, "update_cluster_id")
+        self.patch(Deployment, "update_replicas")
         self.harness.charm._stored.resources_created = True
         self.harness.set_leader(True)
         relation_id = self.harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
@@ -530,6 +532,7 @@ log file = /var/log/ceph.log
         ConfigMap.update_config_json.assert_called_with(
             json.dumps([{"clusterID": "abcde", "monitors": ["10.0.0.1"]}], indent=4)
         )
+        Deployment.update_replicas.assert_called_once_with(3)
 
     def test_ceph_client_relation_changed_non_leader(self):
         self.harness.set_leader(False)

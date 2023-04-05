@@ -346,6 +346,17 @@ class TestResourceActions(unittest.TestCase):
 
         self.remove_action_mock.assert_called_once_with(self.res_name, self.res_namespace)
 
+    def test_deployment_update_replicas(self):
+        """Test that `Deployment.update_replicas` calls update method properly."""
+        new_value = "~~patched~~"
+        expected_patch = {"spec": {"replicas": new_value}}
+
+        deployment = Deployment(self.api_mock, self.res_name, self.res_namespace)
+        update_mock = self.patch(deployment.api, "patch_namespaced_deployment")
+        deployment.update_replicas(new_value)
+
+        update_mock.assert_called_once_with(self.res_name, self.res_namespace, body=expected_patch)
+
     def test_daemon_set_removal(self):
         """Test that removing DaemonSet resource calls appropriate api method."""
         self.api_mock.delete_namespaced_daemon_set = self.remove_action_mock

@@ -4,10 +4,10 @@
 #  pylint: disable=W0621
 
 import logging
-import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 from kubernetes import client, config
 from pytest_operator.plugin import OpsTest
 
@@ -26,17 +26,25 @@ async def kube_config(ops_test: OpsTest) -> Path:
 
     Config file is fetched from kubernetes-control-plane unit and stored in the temporary file.
     """
-    k8s_cp = ops_test.model.applications["kubernetes-control-plane"].units[0]
+    k_c_p = ops_test.model.applications["kubernetes-control-plane"]
+    (leader,) = [u for u in k_c_p.units if (await u.is_leader_from_status())]
+    action = await leader.run_action("get-kubeconfig")
+    action = await action.wait()
+    success = (
+        action.status == "completed"
+        and action.results["return-code"] == 0
+        and "kubeconfig" in action.results
+    )
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        kube_config_file = Path(tmp_dir).joinpath("kube_config")
+    if not success:
+        logging.error(f"status: {action.status}")
+        logging.error(f"results:\n{yaml.safe_dump(action.results, indent=2)}")
+        pytest.fail("Failed to copy kubeconfig from kubernetes-control-plane")
 
-        cmd = "juju scp -m {} {}:config {}".format(
-            ops_test.model_name, k8s_cp.name, kube_config_file
-        ).split()
-        return_code, _, std_err = await ops_test.run(*cmd)
-        assert return_code == 0, std_err
-        yield kube_config_file
+    kubeconfig_path = ops_test.tmp_path / "kubeconfig"
+    with kubeconfig_path.open("w") as f:
+        f.write(action.results["kubeconfig"])
+    yield kubeconfig_path
 
 
 @pytest.fixture()
