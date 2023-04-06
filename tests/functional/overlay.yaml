@@ -28,6 +28,8 @@ applications:
       osd-journals: 1G,1
   ceph-csi:
     charm: {{ charm }}
+    options:
+      provisioner-replicas: 2
 relations:
 - - ceph-osd
   - ceph-mon

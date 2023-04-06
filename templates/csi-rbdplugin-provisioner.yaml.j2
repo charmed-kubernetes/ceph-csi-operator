@@ -23,7 +23,7 @@ metadata:
   # replace with non-default namespace name
   namespace: default
 spec:
-  replicas: 3
+  replicas: {{ provisioner_replicas or 3 }}
   selector:
     matchLabels:
       app: csi-rbdplugin-provisioner

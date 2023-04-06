@@ -8,3 +8,8 @@ options:
     default: ceph-xfs
     description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs'"
     type: string
+
+  provisioner-replicas:
+    default: 3
+    description: "Number of replicas of any csi-*plugin-provisioner deployment"
+    type: int

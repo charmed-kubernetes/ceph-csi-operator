@@ -201,6 +201,11 @@ log file = /var/log/ceph.log
         return fsid
 
     @property
+    def provisioner_replicas(self) -> int:
+        """Get the number of csi-*plugin-provisioner replicas."""
+        return int(self.config.get("provisioner-replicas") or 3)
+
+    @property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
@@ -208,6 +213,7 @@ log file = /var/log/ceph.log
             "kubernetes_key": self.key,
             "mon_hosts": json.dumps(self.mon_hosts),
             "user": self.app.name,
+            "provisioner_replicas": self.provisioner_replicas,
         }
 
     @property
@@ -444,6 +450,25 @@ log file = /var/log/ceph.log
         self.request_ceph_pools()
         self.request_ceph_permissions()
 
+    def _update_resources(self) -> bool:
+        if updated := cast(bool, self._stored.resources_created):
+            # Update already existing resources that depend on ceph-client data
+            secret_key = self.key or ""
+            fsid = self.get_ceph_fsid()
+            mon_hosts = self.mon_hosts
+
+            for resource in self.resources:
+                if isinstance(resource, Secret):
+                    resource.update_opaque_data("userKey", secret_key)
+                elif isinstance(resource, StorageClass):
+                    resource.update_cluster_id(fsid)
+                elif isinstance(resource, ConfigMap):
+                    config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
+                    resource.update_config_json(json.dumps(config_data, indent=4))
+                elif isinstance(resource, Deployment):
+                    resource.update_replicas(self.provisioner_replicas)
+        return updated
+
     def _on_ceph_client_changed(self, event: RelationChangedEvent) -> None:
         """Fetch information from ceph-client relation and update Kubernetes
         resources
@@ -455,21 +480,7 @@ log file = /var/log/ceph.log
 
         if self.safe_load_ceph_client_data():
             self.configure_ceph_cli()
-            if cast(bool, self._stored.resources_created):
-                # Update already existing resources that depend on ceph-client data
-                secret_key = self.key or ""
-                fsid = self.get_ceph_fsid()
-                mon_hosts = self.mon_hosts
-
-                for resource in self.resources:
-                    if isinstance(resource, Secret):
-                        resource.update_opaque_data("userKey", secret_key)
-                    elif isinstance(resource, StorageClass):
-                        resource.update_cluster_id(fsid)
-                    elif isinstance(resource, ConfigMap):
-                        config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
-                        resource.update_config_json(json.dumps(config_data, indent=4))
-            else:
+            if not self._update_resources():
                 # No kubernetes resources exist yet. This is the first time that ceph-client
                 # relation has all the required data
                 all_resources = self.render_all_resource_definitions()
@@ -483,7 +494,6 @@ log file = /var/log/ceph.log
                     logger.info("ControlPlane not yet ready...")
                     event.defer()
                     return
-
                 self._stored.resources_created = True
             self.app.status = ActiveStatus(self.manifest_version)
             self.unit.status = UNIT_READY_STATUS
@@ -525,6 +535,9 @@ log file = /var/log/ceph.log
                     "{} 'default-storage'. See logs for more info.".format(BAD_CONFIG_PREFIX)
                 )
                 return
+
+        # Update resources if they are currently installed in cluster
+        self._update_resources()
 
         # Resolve blocked state caused by bad configuration
         status = self.unit.status
