@@ -154,6 +154,7 @@ log file = /var/log/ceph.log
 
         # key and value format expected in context for Kubernetes templates.
         expected_context = {
+            "auth": None,
             "fsid": fsid,
             "kubernetes_key": key,
             "mon_hosts": expected_monitors_format,
@@ -187,6 +188,7 @@ log file = /var/log/ceph.log
             Service(api_mock, "csi-metrics-rbdplugin", namespace),
             Service(api_mock, "csi-rbdplugin-provisioner", namespace),
             Deployment(api_mock, "csi-rbdplugin-provisioner", namespace),
+            ConfigMap(api_mock, "ceph-config", namespace),
             ConfigMap(api_mock, "ceph-csi-config", namespace),
             ConfigMap(api_mock, "ceph-csi-encryption-kms-config", namespace),
             DaemonSet(api_mock, "csi-rbdplugin", namespace),
@@ -508,6 +510,7 @@ log file = /var/log/ceph.log
         """
         self.patch(CephCsiCharm, "configure_ceph_cli")
         self.patch(CephCsiCharm, "get_ceph_fsid").return_value = "abcde"
+        self.patch(ConfigMap, "update_config_conf")
         self.patch(ConfigMap, "update_config_json")
         self.patch(Secret, "update_opaque_data")
         self.patch(StorageClass, "update_cluster_id")
@@ -529,6 +532,7 @@ log file = /var/log/ceph.log
         )
         Secret.update_opaque_data.assert_called_once_with("userKey", "12345")
         StorageClass.update_cluster_id.assert_called_with("abcde")
+        ConfigMap.update_config_conf.assert_called_once_with("cephx")
         ConfigMap.update_config_json.assert_called_with(
             json.dumps([{"clusterID": "abcde", "monitors": ["10.0.0.1"]}], indent=4)
         )

@@ -19,6 +19,20 @@ import os
 import subprocess
 from functools import wraps
 from pathlib import Path
+from resource import (
+    ClusterRole,
+    ClusterRoleBinding,
+    ConfigMap,
+    DaemonSet,
+    Deployment,
+    Resource,
+    Role,
+    RoleBinding,
+    Secret,
+    Service,
+    ServiceAccount,
+    StorageClass,
+)
 from typing import Any, Callable, Dict, List, Optional, cast
 
 import urllib3.exceptions
@@ -38,21 +52,6 @@ from ops.charm import (
 from ops.framework import StoredDict, StoredState
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
-
-from resources import (
-    ClusterRole,
-    ClusterRoleBinding,
-    ConfigMap,
-    DaemonSet,
-    Deployment,
-    Resource,
-    Role,
-    RoleBinding,
-    Secret,
-    Service,
-    ServiceAccount,
-    StorageClass,
-)
 
 logger = logging.getLogger(__name__)
 
