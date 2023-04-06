@@ -88,6 +88,7 @@ class CephCsiCharm(CharmBase):
     REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
 
     RESOURCE_TEMPLATES = [
+        "ceph-conf.yaml.j2",
         "ceph-csi-encryption-kms-config.yaml.j2",
         "ceph-secret.yaml.j2",
         "csi-config-map.yaml.j2",
@@ -499,7 +500,7 @@ log file = /var/log/ceph.log
                     event.defer()
                     return
                 self._stored.resources_created = True
-            self.app.status = ActiveStatus(self.manifest_version)
+            self.unit.set_workload_version(self.manifest_version)
             self.unit.status = UNIT_READY_STATUS
 
     def _on_ceph_client_removed(self, event: RelationDepartedEvent) -> None:

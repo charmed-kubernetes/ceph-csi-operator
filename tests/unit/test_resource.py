@@ -252,7 +252,12 @@ class TestResourceActions(unittest.TestCase):
 
     def test_config_map_update_conf(self):
         """Test that `ConfigMap.update_config_conf` calls update method properly."""
-        new_config = "[global]\nauth_cluster_required = new_data\nauth_service_required = new_data\nauth_client_required = new_data\n"
+        new_config = (
+            "[global]\n"
+            "auth_cluster_required = new_data\n"
+            "auth_service_required = new_data\n"
+            "auth_client_required = new_data\n"
+        )
         expected_patch = {"data": {"config.conf": new_config}}
 
         update_mock = self.patch(ConfigMap, "update")
