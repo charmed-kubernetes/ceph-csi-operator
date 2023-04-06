@@ -528,7 +528,7 @@ log file = /var/log/ceph.log
 
         # Resolve blocked state caused by bad configuration
         status = self.unit.status
-        if status.name == BlockedStatus.name and status.message.startswith(BAD_CONFIG_PREFIX):
+        if isinstance(status, BlockedStatus) and status.message.startswith(BAD_CONFIG_PREFIX):
             self.unit.status = UNIT_READY_STATUS
 
 
