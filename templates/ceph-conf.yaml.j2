@@ -1,0 +1,18 @@
+---
+# Sample ceph.conf available at
+# https://github.com/ceph/ceph/blob/main/src/sample.ceph.conf Detailed
+# documentation is available at
+# https://docs.ceph.com/en/latest/rados/configuration/ceph-conf/
+apiVersion: v1
+kind: ConfigMap
+data:
+  ceph.conf: |
+    [global]
+    auth_cluster_required = {{ auth }}
+    auth_service_required = {{ auth }}
+    auth_client_required = {{ auth }}
+
+  # keyring is a required key and its value should be empty
+  keyring: |
+metadata:
+  name: ceph-config

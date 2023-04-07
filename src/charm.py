@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 from functools import wraps
+from pathlib import Path
 from resource import (
     ClusterRole,
     ClusterRoleBinding,
@@ -87,6 +88,7 @@ class CephCsiCharm(CharmBase):
     REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
 
     RESOURCE_TEMPLATES = [
+        "ceph-conf.yaml.j2",
         "ceph-csi-encryption-kms-config.yaml.j2",
         "ceph-secret.yaml.j2",
         "csi-config-map.yaml.j2",
@@ -208,6 +210,7 @@ log file = /var/log/ceph.log
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
+            "auth": self.auth,
             "fsid": self.get_ceph_fsid(),
             "kubernetes_key": self.key,
             "mon_hosts": json.dumps(self.mon_hosts),
@@ -255,6 +258,7 @@ log file = /var/log/ceph.log
             Service(core_api, "csi-metrics-rbdplugin", self.K8S_NS),
             Service(core_api, "csi-rbdplugin-provisioner", self.K8S_NS),
             Deployment(app_api, "csi-rbdplugin-provisioner", self.K8S_NS),
+            ConfigMap(core_api, "ceph-config", self.K8S_NS),
             ConfigMap(core_api, "ceph-csi-config", self.K8S_NS),
             ConfigMap(core_api, "ceph-csi-encryption-kms-config", self.K8S_NS),
             DaemonSet(app_api, "csi-rbdplugin", self.K8S_NS),
@@ -357,6 +361,11 @@ log file = /var/log/ceph.log
 
         return storage_classes
 
+    @property
+    def manifest_version(self) -> str:
+        """Read the manifest version from templates."""
+        return Path(self.template_dir, "version.txt").read_text().strip()
+
     def render_all_resource_definitions(self) -> List[Dict]:
         """Render all resources required for ceph-csi."""
         return self.render_resource_definitions() + self.render_storage_definitions()
@@ -456,6 +465,8 @@ log file = /var/log/ceph.log
                     resource.update_opaque_data("userKey", secret_key)
                 elif isinstance(resource, StorageClass):
                     resource.update_cluster_id(fsid)
+                elif isinstance(resource, ConfigMap) and resource.name == "ceph-config":
+                    resource.update_config_conf(self.auth or "cephx")
                 elif isinstance(resource, ConfigMap):
                     config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
                     resource.update_config_json(json.dumps(config_data, indent=4))
@@ -489,6 +500,7 @@ log file = /var/log/ceph.log
                     event.defer()
                     return
                 self._stored.resources_created = True
+            self.unit.set_workload_version(self.manifest_version)
             self.unit.status = UNIT_READY_STATUS
 
     def _on_ceph_client_removed(self, event: RelationDepartedEvent) -> None:

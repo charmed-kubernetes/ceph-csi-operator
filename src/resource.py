@@ -236,6 +236,16 @@ class ConfigMap(CoreResource):
     def _update_namespaced_action(self) -> Callable:
         return self.api.patch_namespaced_config_map
 
+    def update_config_conf(self, auth: str) -> None:
+        """Update value of "config.conf" field in "data" attribute."""
+        content = (
+            "[global]\n"
+            f"auth_cluster_required = {auth}\n"
+            f"auth_service_required = {auth}\n"
+            f"auth_client_required = {auth}\n"
+        )
+        self.update({"data": {"config.conf": content}})
+
     def update_config_json(self, config: str) -> None:
         """Update value of "config.json" field in "data" attribute."""
         self.update({"data": {"config.json": config}})

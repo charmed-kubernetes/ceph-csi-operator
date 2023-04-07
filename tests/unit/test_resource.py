@@ -250,6 +250,23 @@ class TestResourceActions(unittest.TestCase):
 
         update_mock.assert_called_once_with(expected_patch)
 
+    def test_config_map_update_conf(self):
+        """Test that `ConfigMap.update_config_conf` calls update method properly."""
+        new_config = (
+            "[global]\n"
+            "auth_cluster_required = new_data\n"
+            "auth_service_required = new_data\n"
+            "auth_client_required = new_data\n"
+        )
+        expected_patch = {"data": {"config.conf": new_config}}
+
+        update_mock = self.patch(ConfigMap, "update")
+
+        config_map = ConfigMap(self.api_mock, self.res_name, self.res_namespace)
+        config_map.update_config_conf("new_data")
+
+        update_mock.assert_called_once_with(expected_patch)
+
     def test_cluster_role_removal(self):
         """Test that removing ClusterRole resource calls appropriate api method."""
         self.api_mock.delete_cluster_role = self.remove_action_mock
