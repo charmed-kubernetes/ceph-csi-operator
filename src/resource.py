@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright 2021 Martin Kalcok
 # See LICENSE file for licensing details.
 #
