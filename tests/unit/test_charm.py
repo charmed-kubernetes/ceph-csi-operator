@@ -160,6 +160,7 @@ log file = /var/log/ceph.log
             "mon_hosts": expected_monitors_format,
             "user": "ceph-csi",
             "provisioner_replicas": 3,
+            "enable_host_network": "false",
         }
 
         self.assertEqual(self.harness.charm.ceph_context, expected_context)
@@ -515,6 +516,7 @@ log file = /var/log/ceph.log
         self.patch(Secret, "update_opaque_data")
         self.patch(StorageClass, "update_cluster_id")
         self.patch(Deployment, "update_replicas")
+        self.patch(Deployment, "update_host_networking")
         self.harness.charm._stored.resources_created = True
         self.harness.set_leader(True)
         relation_id = self.harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")

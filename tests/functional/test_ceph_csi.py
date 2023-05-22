@@ -64,6 +64,20 @@ async def test_active_status(ops_test: OpsTest):
         assert unit.workload_status_message == "Unit is ready"
 
 
+async def test_host_networking(kube_config: Path, namespace: str, ops_test):
+    """Test that ceph-csi deployments can be run with host networking."""
+    config.load_kube_config(str(kube_config))
+    apps_api = client.AppsV1Api()
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    assert rbdplugin.spec.template.spec.host_network is True  # from the test overlay.yaml
+
+    test_app = ops_test.model.applications["ceph-csi"]
+    await test_app.set_config({"enable-host-networking": "false"})
+    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    assert rbdplugin.spec.template.spec.host_network in (None, False)
+
+
 async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     """Test that ceph-csi deployments run the correctly sized replicas."""
     config.load_kube_config(str(kube_config))

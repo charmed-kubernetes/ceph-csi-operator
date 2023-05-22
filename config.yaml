@@ -13,3 +13,8 @@ options:
     default: 3
     description: "Number of replicas of any csi-*plugin-provisioner deployment"
     type: int
+
+  enable-host-networking:
+    default: false
+    description: "Whether or not csi-*plugin-provisioner deployments use host-networking"
+    type: boolean

@@ -30,6 +30,7 @@ applications:
     charm: {{ charm }}
     options:
       provisioner-replicas: 2
+      enable-host-networking: true
 relations:
 - - ceph-osd
   - ceph-mon

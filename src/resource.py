@@ -325,6 +325,10 @@ class Deployment(AppsResource):
         """Update replicas value."""
         self.update({"spec": {"replicas": count}})
 
+    def update_host_networking(self, enabled: bool) -> None:
+        """Update hostNetwork value."""
+        self.update({"spec": {"template": {"spec": {"hostNetwork": enabled}}}})
+
 
 class DaemonSet(AppsResource):
     """Kubernetes 'DaemonSet' resource."""
