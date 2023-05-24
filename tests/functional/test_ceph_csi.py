@@ -64,20 +64,6 @@ async def test_active_status(ops_test: OpsTest):
         assert unit.workload_status_message == "Unit is ready"
 
 
-async def test_host_networking(kube_config: Path, namespace: str, ops_test):
-    """Test that ceph-csi deployments can be run with host networking."""
-    config.load_kube_config(str(kube_config))
-    apps_api = client.AppsV1Api()
-    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
-    assert rbdplugin.spec.template.spec.host_network is True  # from the test overlay.yaml
-
-    test_app = ops_test.model.applications["ceph-csi"]
-    await test_app.set_config({"enable-host-networking": "false"})
-    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
-    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
-    assert rbdplugin.spec.template.spec.host_network in (None, False)
-
-
 async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     """Test that ceph-csi deployments run the correctly sized replicas."""
     config.load_kube_config(str(kube_config))
@@ -86,8 +72,8 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     k8s_workers = ops_test.model.applications["kubernetes-worker"]
     assert rbdplugin.status.replicas == 2  # from the test overlay.yaml
     # Due to anti-affinity rules on the control-plane, the ready replicas
-    # are limited to the number of worker nodes
-    assert rbdplugin.status.ready_replicas <= len(k8s_workers.units)
+    # are limited to the number of worker nodes, of which there are 2
+    assert rbdplugin.status.ready_replicas == len(k8s_workers.units)
 
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
@@ -183,3 +169,20 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
         await ceph_csi_app.set_config({"default-storage": storage_class})
         await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=30)
         await assert_is_default_class(storage_class, storage_api)
+
+
+async def test_host_networking(kube_config: Path, namespace: str, ops_test):
+    """Test that ceph-csi deployments can be run with host networking."""
+    config.load_kube_config(str(kube_config))
+    apps_api = client.AppsV1Api()
+    test_app = ops_test.model.applications["ceph-csi"]
+
+    await test_app.set_config({"enable-host-networking": "true"})
+    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    assert rbdplugin.spec.template.spec.host_network is True
+
+    await test_app.set_config({"enable-host-networking": "false"})
+    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    assert rbdplugin.spec.template.spec.host_network in (None, False)
