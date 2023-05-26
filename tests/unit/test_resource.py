@@ -374,6 +374,17 @@ class TestResourceActions(unittest.TestCase):
 
         update_mock.assert_called_once_with(self.res_name, self.res_namespace, body=expected_patch)
 
+    def test_deployment_update_host_network(self):
+        """Test that `Deployment.update_host_network` calls update method properly."""
+        new_value = "~~False~~"
+        expected_patch = {"spec": {"template": {"spec": {"hostNetwork": new_value}}}}
+
+        deployment = Deployment(self.api_mock, self.res_name, self.res_namespace)
+        update_mock = self.patch(deployment.api, "patch_namespaced_deployment")
+        deployment.update_host_networking(new_value)
+
+        update_mock.assert_called_once_with(self.res_name, self.res_namespace, body=expected_patch)
+
     def test_daemon_set_removal(self):
         """Test that removing DaemonSet resource calls appropriate api method."""
         self.api_mock.delete_namespaced_daemon_set = self.remove_action_mock

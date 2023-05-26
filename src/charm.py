@@ -207,6 +207,11 @@ log file = /var/log/ceph.log
         return int(self.config.get("provisioner-replicas") or 3)
 
     @property
+    def enable_host_network(self) -> bool:
+        """Get the hostNetwork enabling of csi-*plugin-provisioner deployments."""
+        return bool(self.config.get("enable-host-networking"))
+
+    @property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
@@ -216,6 +221,7 @@ log file = /var/log/ceph.log
             "mon_hosts": json.dumps(self.mon_hosts),
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
+            "enable_host_network": json.dumps(self.enable_host_network),
         }
 
     @property
@@ -472,6 +478,7 @@ log file = /var/log/ceph.log
                     resource.update_config_json(json.dumps(config_data, indent=4))
                 elif isinstance(resource, Deployment):
                     resource.update_replicas(self.provisioner_replicas)
+                    resource.update_host_networking(self.enable_host_network)
         return updated
 
     def _on_ceph_client_changed(self, event: RelationChangedEvent) -> None:

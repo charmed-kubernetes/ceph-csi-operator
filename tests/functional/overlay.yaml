@@ -10,6 +10,7 @@ applications:
       allow-privileged: "true"
   kubernetes-worker:
     expose: true
+    num_units: 2
   ceph-mon:
     charm: ceph-mon
     channel: "pacific/stable"
@@ -30,6 +31,7 @@ applications:
     charm: {{ charm }}
     options:
       provisioner-replicas: 2
+      enable-host-networking: false
 relations:
 - - ceph-osd
   - ceph-mon
