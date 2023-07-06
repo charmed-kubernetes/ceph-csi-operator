@@ -1,5 +1,5 @@
 ops >= 1.2.0
-kubernetes
+ops.manifest >= 1.1.3, < 2.0
 jinja2
 pyyaml
 git+https://github.com/openstack/charm-ops-interface-ceph-client@d4d0cefc5e92edd28cdbf5d00e190d4498896418#egg=interface_ceph_client

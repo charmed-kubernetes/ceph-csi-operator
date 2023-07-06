@@ -29,9 +29,9 @@ spec:
           securityContext:
             privileged: true
             allowPrivilegeEscalation: true
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-node-driver-registrar:v2.5.1
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.5.1
           args:
-            - "--v=5"
+            - "--v=1"
             - "--csi-address=/csi/csi.sock"
             - "--kubelet-registration-path=/var/lib/kubelet/plugins/rbd.csi.ceph.com/csi.sock"
           env:
@@ -51,7 +51,7 @@ spec:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
           # for stable functionality replace canary with latest release version
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.7.2
+          image: quay.io/cephcsi/cephcsi:v3.7.2
           args:
             - "--nodeid=$(NODE_ID)"
             - "--pluginpath=/var/lib/kubelet/plugins"
@@ -126,7 +126,7 @@ spec:
           securityContext:
             privileged: true
             allowPrivilegeEscalation: true
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.7.2
+          image: quay.io/cephcsi/cephcsi:v3.7.2
           args:
             - "--type=liveness"
             - "--endpoint=$(CSI_ENDPOINT)"

@@ -6,7 +6,7 @@
 options:
   default-storage:
     default: ceph-xfs
-    description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs'"
+    description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs', 'cephfs'"
     type: string
 
   provisioner-replicas:
@@ -18,3 +18,34 @@ options:
     default: false
     description: "Whether or not csi-*plugin-provisioner deployments use host-networking"
     type: boolean
+
+  cephfs-enable:
+    default: false
+    description: "Whether or not cephfs manifests are installed"
+    type: boolean
+
+  cephfs-mounter:
+    default: ""
+    description: |
+      The driver can use either ceph-fuse (fuse) or ceph kernelclient (kernel).
+      If omitted, default volume mounter will be used - this is
+      determined by probing for ceph-fuse and mount.ceph
+    type: string
+
+  release:
+    type: string
+    description: |
+      Specify the version of ceph-csi as defined by the `release`
+      tags of https://github.com/ceph/ceph-csi
+
+      example)
+        juju config ceph-csi release='v3.7.2'
+      
+      A list of supported versions is available through the action:
+        juju run-action ceph-csi/leader list-releases --wait
+      
+      To reset by to the latest supported by the charm use:
+        juju config ceph-csi --reset release
+      
+      The current release deployed is available by viewing
+        juju status ceph-csi

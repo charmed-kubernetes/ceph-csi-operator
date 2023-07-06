@@ -1,57 +1,29 @@
 #!/usr/bin/env python3
 # Copyright 2021 Martin Kalcok
 # See LICENSE file for licensing details.
-#
-# Learn more at: https://juju.is/docs/sdk
+"""Dispatch logic for the ceph-csi storage charm."""
 
-"""Charm the service.
-
-Refer to the following post for a quick-start guide that will help you
-develop a new k8s charm using the Operator Framework:
-
-    https://discourse.charmhub.io/t/4208
-"""
-
-import itertools
+import configparser
 import json
 import logging
-import os
+import pickle
 import subprocess
 from functools import wraps
+from hashlib import md5
 from pathlib import Path
-from resource import (
-    ClusterRole,
-    ClusterRoleBinding,
-    ConfigMap,
-    DaemonSet,
-    Deployment,
-    Resource,
-    Role,
-    RoleBinding,
-    Secret,
-    Service,
-    ServiceAccount,
-    StorageClass,
-)
 from typing import Any, Callable, Dict, List, Optional, cast
 
-import urllib3.exceptions
-import yaml
+import charms.operator_libs_linux.v0.apt as apt
 from interface_ceph_client import ceph_client  # type: ignore
-from jinja2 import Environment, FileSystemLoader
-from kubernetes import client, config, utils
-from kubernetes.client.exceptions import ApiException
-from ops.charm import (
-    CharmBase,
-    ConfigChangedEvent,
-    InstallEvent,
-    RelationChangedEvent,
-    RelationDepartedEvent,
-    RelationJoinedEvent,
-)
-from ops.framework import StoredDict, StoredState
+from ops.charm import ActionEvent, CharmBase, EventBase
+from ops.framework import StoredState
 from ops.main import main
-from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
+from ops.manifests import Collector, ManifestClientError, Manifests
+from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
+
+from cephfs_manifests import CephFSManifests
+from config_manifest import ConfigManifests
+from rbd_manifests import RBDManifests
 
 logger = logging.getLogger(__name__)
 
@@ -77,62 +49,112 @@ def needs_leader(func: Callable) -> Callable:
     return leader_check
 
 
+class SafeManifest(Manifests):
+    @property
+    def config(self) -> Dict:
+        return {}
+
+    def hash(self) -> int:
+        """Calculate a hash of the current configuration."""
+        return int(md5(pickle.dumps(self.config)).hexdigest(), 16)
+
+    def evaluate(self) -> Optional[str]:
+        ...
+
+
 class CephCsiCharm(CharmBase):
     """Charm the service."""
 
     CEPH_CLIENT_RELATION = "ceph-client"
     K8S_NS = "default"
 
-    XFS_STORAGE = "ceph-xfs"
-    EXT4_STORAGE = "ceph-ext4"
+    DEFAULT_STORAGE = "ceph-xfs"
     REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
 
-    RESOURCE_TEMPLATES = [
-        "ceph-conf.yaml.j2",
-        "ceph-csi-encryption-kms-config.yaml.j2",
-        "ceph-secret.yaml.j2",
-        "csi-config-map.yaml.j2",
-        "csi-nodeplugin-rbac.yaml.j2",
-        "csi-provisioner-rbac.yaml.j2",
-        "csi-rbdplugin-provisioner.yaml.j2",
-        "csi-rbdplugin.yaml.j2",
-    ]
-    STORAGE_CLASS_TEMPLATE = "ceph-storageclass.yaml.j2"
-
-    _stored = StoredState()
+    stored = StoredState()
 
     def __init__(self, *args: Any) -> None:
         """Setup even observers and initial storage values."""
         super().__init__(*args)
         self.ceph_client = ceph_client.CephClientRequires(self, "ceph-client")
-        self.framework.observe(self.on.install, self._on_install)
-        self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
         )
-        self.framework.observe(self.on.ceph_client_relation_changed, self._on_ceph_client_changed)
+        self.framework.observe(self.on.ceph_client_relation_changed, self._merge_config)
         self.framework.observe(self.on.ceph_client_relation_broken, self._on_ceph_client_removed)
-        self._stored.set_default(ceph_data={})
-        self._stored.set_default(resources_created=False)
-        self._stored.set_default(default_storage_class=self.XFS_STORAGE)
 
-        self.template_dir = self.charm_dir.joinpath("templates")
+        self.framework.observe(self.on.list_versions_action, self._list_versions)
+        self.framework.observe(self.on.list_resources_action, self._list_resources)
+        self.framework.observe(self.on.scrub_resources_action, self._scrub_resources)
+        self.framework.observe(self.on.sync_resources_action, self._sync_resources)
+        self.framework.observe(self.on.update_status, self._update_status)
 
-    @staticmethod
-    def copy_stored_dict(stored_dict: StoredDict) -> dict:
-        """Return copy of StoredDict as a basic dict.
+        self.framework.observe(self.on.install, self._on_install_or_upgrade)
+        self.framework.observe(self.on.upgrade_charm, self._on_install_or_upgrade)
+        self.framework.observe(self.on.config_changed, self._merge_config)
+        self.framework.observe(self.on.stop, self._cleanup)
 
-        This is a convenience function as the StoredDict object does not implement
-        copy() method.
+        self.stored.set_default(ceph_data={})
+        self.stored.set_default(config_hash=0)  # hashed value of the provider config once valid
+        self.stored.set_default(deployed=False)  # True if config has been applied after new hash
 
-        :param stored_dict: StoredDict instance to be copied
-        :return: copy of stored_dict
-        """
-        return dict(stored_dict.items())
+        self.collector = Collector(
+            ConfigManifests(self),
+            CephFSManifests(self),
+            RBDManifests(self),
+        )
+
+    def _ops_wait_for(self, event: EventBase, msg: str) -> str:
+        self.unit.status = WaitingStatus(msg)
+        event.defer()
+        return msg
+
+    def _ops_blocked_by(self, msg: str, exc_info: bool = False) -> str:
+        self.unit.status = BlockedStatus(msg)
+        if exc_info:
+            logger.exception(msg)
+        return msg
+
+    def _list_versions(self, event: ActionEvent) -> None:
+        self.collector.list_versions(event)
+
+    def _list_resources(self, event: ActionEvent) -> None:
+        manifests = event.params.get("manifest", "")
+        resources = event.params.get("resources", "")
+        return self.collector.list_resources(event, manifests, resources)
+
+    def _scrub_resources(self, event: ActionEvent) -> None:
+        manifests = event.params.get("manifest", "")
+        resources = event.params.get("resources", "")
+        return self.collector.scrub_resources(event, manifests, resources)
+
+    def _sync_resources(self, event: ActionEvent) -> None:
+        manifests = event.params.get("manifest", "")
+        resources = event.params.get("resources", "")
+        try:
+            self.collector.apply_missing_resources(event, manifests, resources)
+        except ManifestClientError:
+            msg = "Failed to apply missing resources. API Server unavailable."
+            event.set_results({"result": msg})
+        else:
+            self.stored.deployed = True
+
+    def _update_status(self, _: EventBase) -> None:
+        if not cast(bool, self.stored.deployed):
+            return
+
+        unready = self.collector.unready
+        if unready:
+            self.unit.status = WaitingStatus(", ".join(unready))
+        else:
+            self.unit.status = ActiveStatus("Ready")
+            self.unit.set_workload_version(self.collector.short_version)
+            if self.unit.is_leader():
+                self.app.status = ActiveStatus(self.collector.long_version)
 
     @property
     def _ceph_data(self) -> Dict[str, Any]:
-        return cast(Dict[str, Any], self._stored.ceph_data)
+        return cast(Dict[str, Any], self.stored.ceph_data)
 
     @property
     def auth(self) -> Optional[str]:
@@ -149,33 +171,43 @@ class CephCsiCharm(CharmBase):
         """Return stored Ceph monitor hosts from ceph-client relation"""
         return list(self._ceph_data.get("mon_hosts", []))
 
-    def install_ceph_common(self) -> None:
+    def _install_ceph_common(self) -> bool:
         """Install ceph-common apt package"""
-        subprocess.check_call(["apt-get", "update"])
-        subprocess.check_call(["apt-get", "install", "-y", "ceph-common"])
+        self.unit.status = MaintenanceStatus("Installing Binaries")
+        packages = ["ceph-common"]
+        logger.info(f"Installing apt packages {', '.join(packages)}")
+        try:
+            # Run `apt-get update` and add packages
+            apt.add_package(packages, update_cache=True)
+        except apt.PackageNotFoundError:
+            self._ops_blocked_by("Apt packages not found.", exc_info=True)
+            return False
+        except apt.PackageError:
+            self._ops_blocked_by("Could not apt install packages", exc_info=True)
+            return False
+
+        return True
 
     def write_ceph_cli_config(self) -> None:
         """Write Ceph CLI .conf file"""
-        ceph_conf_path = "/etc/ceph/ceph.conf"
-        ceph_conf = f"""[global]
-auth cluster required = {self.auth}
-auth service required = {self.auth}
-auth client required = {self.auth}
-keyring = /etc/ceph/$cluster.$name.keyring
-mon host = {" ".join(self.mon_hosts)}
+        config = configparser.ConfigParser()
+        config["global"] = {
+            "auth_cluster_required": self.auth or "",
+            "auth_service_required": self.auth or "",
+            "auth_client_required": self.auth or "",
+            "keyring": "/etc/ceph/$cluster.$name.keyring",
+            "mon host": " ".join(self.mon_hosts),
+            "log to syslog": "true",
+            "err to syslog": "true",
+            "clog to syslog": "true",
+            "mon cluster log to syslog": "true",
+            "debug mon": "1/5",
+            "debug osd": "1/5",
+        }
+        config["client"] = {"log file": "/var/log/ceph.log"}
 
-log to syslog = true
-err to syslog = true
-clog to syslog = true
-mon cluster log to syslog = true
-debug mon = 1/5
-debug osd = 1/5
-
-[client]
-log file = /var/log/ceph.log
-"""
-        with open(ceph_conf_path, "w") as f:
-            f.write(ceph_conf)
+        with Path("/etc/ceph/ceph.conf").open("w") as fp:
+            config.write(fp)
 
     def write_ceph_cli_keyring(self) -> None:
         """Write Ceph CLI keyring file"""
@@ -186,8 +218,7 @@ log file = /var/log/ceph.log
 
     def configure_ceph_cli(self) -> None:
         """Configure Ceph CLI"""
-        ceph_conf_dir = "/etc/ceph"
-        os.makedirs(ceph_conf_dir, exist_ok=True)
+        Path("/etc/ceph").mkdir(parents=True, exist_ok=True)
         self.write_ceph_cli_config()
         self.write_ceph_cli_keyring()
 
@@ -200,6 +231,14 @@ log file = /var/log/ceph.log
         """Get the Ceph FSID (cluster ID)"""
         fsid = self.ceph_cli("fsid").strip()
         return fsid
+
+    def get_cephfs_fsname(self) -> str | None:
+        """Get the Ceph FS Name."""
+        data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
+        for fs in data:
+            if "ceph-fs_data" in fs["data_pools"]:
+                return fs["name"]
+        return None
 
     @property
     def provisioner_replicas(self) -> int:
@@ -222,83 +261,41 @@ log file = /var/log/ceph.log
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
+            "fsname": self.get_cephfs_fsname(),
         }
 
-    @property
-    def resources(self) -> List[Resource]:
-        """Return list of k8s resources tied to the ceph-csi charm.
+    def _merge_config(self, event: EventBase) -> None:
+        if not self._check_required_relations():
+            return
 
-        Returned list contains instances that inherit from `Resource` class which provides
-        convenience methods to work with Kubernetes resources.
-        Each instance in the list maps to a specific resources in Kubernetes cluster.
+        self.unit.status = MaintenanceStatus("Evaluating Manifests")
+        new_hash = 0
+        for manifest in self.collector.manifests.values():
+            manifest = cast(SafeManifest, manifest)
+            evaluation = manifest.evaluate()
+            if evaluation:
+                self.unit.status = BlockedStatus(evaluation)
+                return
+            new_hash += manifest.hash()
 
-        Example:
-            for resource in self.resources:
-                try:
-                    resource.remove()
-                except ApiException as exc:
-                    if exc.status != 404: # Don't raise exception if it's is already gone
-                        raise exc
-        """
-        config.load_kube_config()
+        self.stored.deployed = False
+        if self._install_or_upgrade(event, config_hash=new_hash):
+            self.stored.config_hash = new_hash
+            self.stored.deployed = True
 
-        core_api = client.CoreV1Api()
-        auth_api = client.RbacAuthorizationV1Api()
-        storage_api = client.StorageV1Api()
-        app_api = client.AppsV1Api()
+    def _on_install_or_upgrade(self, event: EventBase) -> None:
+        self._install_or_upgrade(event)
 
-        return [
-            Secret(core_api, "csi-rbd-secret", self.K8S_NS),
-            ServiceAccount(core_api, "rbd-csi-nodeplugin", self.K8S_NS),
-            ServiceAccount(core_api, "rbd-csi-provisioner", self.K8S_NS),
-            ClusterRole(auth_api, "rbd-csi-nodeplugin"),
-            ClusterRole(auth_api, "rbd-csi-nodeplugin-rules"),
-            ClusterRole(auth_api, "rbd-external-provisioner-runner-rules"),
-            ClusterRole(auth_api, "rbd-external-provisioner-runner"),
-            ClusterRoleBinding(auth_api, "rbd-csi-nodeplugin"),
-            ClusterRoleBinding(auth_api, "rbd-csi-provisioner-role"),
-            Role(auth_api, "rbd-external-provisioner-cfg", self.K8S_NS),
-            RoleBinding(auth_api, "rbd-csi-provisioner-role-cfg", self.K8S_NS),
-            StorageClass(storage_api, "ceph-ext4"),
-            StorageClass(storage_api, "ceph-xfs"),
-            Service(core_api, "csi-metrics-rbdplugin", self.K8S_NS),
-            Service(core_api, "csi-rbdplugin-provisioner", self.K8S_NS),
-            Deployment(app_api, "csi-rbdplugin-provisioner", self.K8S_NS),
-            ConfigMap(core_api, "ceph-config", self.K8S_NS),
-            ConfigMap(core_api, "ceph-csi-config", self.K8S_NS),
-            ConfigMap(core_api, "ceph-csi-encryption-kms-config", self.K8S_NS),
-            DaemonSet(app_api, "csi-rbdplugin", self.K8S_NS),
-        ]
-
-    def update_stored_state(self, config_name: str, stored_state_name: str) -> bool:
-        """Update value in stored stated based on the value from config.
-
-        Since ConfigChangedEvent does not provide information about which config options
-        were updated, this convenience method allows you to pass name of the config
-        option and name of the corresponding variable in StoredState. If the values
-        do not match, StoredState variable is updated with new value and `True` is
-        returned.
-
-        :param config_name: Name of the config option
-        :param stored_state_name: Corresponding StoredState variable name
-        :return: True if value change otherwise False
-        """
-        new_value = self.config.get(config_name)
-        old_value = getattr(self._stored, stored_state_name)
-
-        if old_value != new_value:
-            logger.info("Updating stored state: %s=%s", stored_state_name, new_value)
-            self._stored.__setattr__(stored_state_name, new_value)
-            return True
-
-        return False
-
-    def _on_install(self, _: InstallEvent) -> None:
+    def _install_or_upgrade(self, event: EventBase, config_hash: Optional[int] = None) -> bool:
         """Execute "on install" event callback."""
-        self.install_ceph_common()
-        self.check_required_relations()
+        error = self._install_ceph_common()
+        error = error or self._check_required_relations()
+        self.stored.installed = not error
 
-    def check_required_relations(self) -> None:
+        error or self._install_manifests(event, config_hash=config_hash)
+        return bool(error)
+
+    def _check_required_relations(self) -> bool:
         """Run check if any required relations are missing"""
         required_relations = [self.CEPH_CLIENT_RELATION]
         missing_relations = [
@@ -308,104 +305,30 @@ log file = /var/log/ceph.log
         ]
 
         if missing_relations:
-            self.unit.status = BlockedStatus(
-                "Missing relations: {}".format(", ".join(missing_relations))
-            )
-        else:
-            self.unit.status = UNIT_READY_STATUS
+            evaluation = "Missing relations: {}".format(", ".join(missing_relations))
+            self.unit.status = BlockedStatus(evaluation)
+            return False
+
+        return self.safe_load_ceph_client_data()
 
     @needs_leader
-    def create_ceph_resources(self, resources: List[Dict]) -> None:  # pylint: disable=R0201
-        """Use kubernetes api to create resources like Pods, Secrets, etc.
+    def _install_manifests(self, event: EventBase, config_hash: Optional[int] = None) -> bool:
+        if cast(int, self.stored.config_hash) == config_hash:
+            logger.info("Skipping until the config is evaluated.")
+            return True
+        if self.unit.is_leader():
+            self.unit.status = MaintenanceStatus("Deploying CephCSI")
+            self.unit.set_workload_version("")
+            for controller in self.collector.manifests.values():
+                try:
+                    controller.apply_manifests()
+                except ManifestClientError as e:
+                    self._ops_wait_for(event, "Waiting for kube-apiserver")
+                    logger.warn(f"Encountered retryable installation error: {e}")
+                    event.defer()
+                    return False
+        return True
 
-        :param resources: list of dictionaries describing resources
-        :return: None
-        """
-        config.load_kube_config()
-        k8s_api = client.ApiClient()
-
-        logger.info("Creating Kubernetes resources.")
-        for resource in resources:
-            logger.debug(
-                "Creating resource %s (%s)", resource["metadata"]["name"], resource["kind"]
-            )
-            utils.create_from_dict(k8s_api, resource)
-
-    def render_resource_definitions(self) -> List[Dict]:
-        """Render resource definitions from templates in self.RESOURCE_TEMPLATES."""
-        env = Environment(loader=FileSystemLoader(self.template_dir))
-        context = self.ceph_context
-
-        resources = [
-            env.get_template(template).render(context) for template in self.RESOURCE_TEMPLATES
-        ]
-
-        resource_dicts = [yaml.safe_load_all(res) for res in resources]
-        return list(itertools.chain.from_iterable(resource_dicts))
-
-    def render_storage_definitions(self) -> List[Dict]:
-        """Render StorageClass definitions for supported filesystem types."""
-        env = Environment(loader=FileSystemLoader(self.template_dir))
-        default_storage = self._stored.default_storage_class
-        storage_classes = []
-
-        ext4_ctx = self.ceph_context
-        ext4_ctx["default"] = default_storage == self.EXT4_STORAGE
-        ext4_ctx["pool_name"] = "ext4-pool"
-        ext4_ctx["fs_type"] = "ext4"
-        ext4_ctx["sc_name"] = "ceph-ext4"
-        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(ext4_ctx)
-        storage_classes.append(yaml.safe_load(resource))
-
-        xfs_ctx = self.ceph_context
-        xfs_ctx["default"] = default_storage == self.XFS_STORAGE
-        xfs_ctx["pool_name"] = "xfs-pool"
-        xfs_ctx["fs_type"] = "xfs"
-        xfs_ctx["sc_name"] = "ceph-xfs"
-        resource = env.get_template(self.STORAGE_CLASS_TEMPLATE).render(xfs_ctx)
-        storage_classes.append(yaml.safe_load(resource))
-
-        return storage_classes
-
-    @property
-    def manifest_version(self) -> str:
-        """Read the manifest version from templates."""
-        return Path(self.template_dir, "version.txt").read_text().strip()
-
-    def render_all_resource_definitions(self) -> List[Dict]:
-        """Render all resources required for ceph-csi."""
-        return self.render_resource_definitions() + self.render_storage_definitions()
-
-    @needs_leader
-    def update_default_storage_class(self, default_class_name: str) -> None:
-        """Set selected StorageClass as a default option."""
-        available_classes = [sc for sc in self.resources if isinstance(sc, StorageClass)]
-
-        # Find StorageClass that matches `default_class_name`
-        try:
-            default_class = [sc for sc in available_classes if sc.name == default_class_name][0]
-        except IndexError as exc:
-            error_msg = (
-                "Unexpected config value for 'default-storage'. "
-                "Valid values: {}. Got: {}".format(
-                    [sc.name for sc in available_classes], default_class_name
-                )
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg) from exc
-
-        logger.info("Setting '%s' StorageClass as default.", default_class_name)
-
-        # according to documentation, proper way to set new default SC is to first unset current
-        # default StorageClass and then set the new default.
-        # https://kubernetes.io/docs/tasks/administer-cluster/change-default-storage-class/
-        for storage_class in available_classes:
-            if storage_class.name != default_class_name:
-                storage_class.set_default(False)
-
-        default_class.set_default(True)
-
-    @needs_leader
     def safe_load_ceph_client_data(self) -> bool:
         """Load data from ceph-mon:client relation and store it in StoredState.
 
@@ -428,6 +351,7 @@ log file = /var/log/ceph.log
             for relation_key in expected_relation_keys:
                 self._ceph_data[relation_key] = relation_data.get(relation_key)
             success = True
+            self.configure_ceph_cli()
 
         return success
 
@@ -452,109 +376,43 @@ log file = /var/log/ceph.log
         ]
         self.ceph_client.request_ceph_permissions(self.app.name, permissions)
 
-    def _on_ceph_client_broker_available(self, event: RelationJoinedEvent) -> None:
+    def _on_ceph_client_broker_available(self, _: EventBase) -> None:
         """Use ceph-mon:client relation to request creation of ceph-pools and
         ceph user permissions
         """
         self.request_ceph_pools()
         self.request_ceph_permissions()
 
-    def _update_resources(self) -> bool:
-        if updated := cast(bool, self._stored.resources_created):
-            # Update already existing resources that depend on ceph-client data
-            secret_key = self.key or ""
-            fsid = self.get_ceph_fsid()
-            mon_hosts = self.mon_hosts
-
-            for resource in self.resources:
-                if isinstance(resource, Secret):
-                    resource.update_opaque_data("userKey", secret_key)
-                elif isinstance(resource, StorageClass):
-                    resource.update_cluster_id(fsid)
-                elif isinstance(resource, ConfigMap) and resource.name == "ceph-config":
-                    resource.update_config_conf(self.auth or "cephx")
-                elif isinstance(resource, ConfigMap):
-                    config_data = [{"clusterID": fsid, "monitors": mon_hosts}]
-                    resource.update_config_json(json.dumps(config_data, indent=4))
-                elif isinstance(resource, Deployment):
-                    resource.update_replicas(self.provisioner_replicas)
-                    resource.update_host_networking(self.enable_host_network)
-        return updated
-
-    def _on_ceph_client_changed(self, event: RelationChangedEvent) -> None:
-        """Fetch information from ceph-client relation and update Kubernetes
-        resources
-        """
-        if not self.unit.is_leader():
-            # Skip resource update on non-leader unit
-            logger.info("Skipping Kubernetes resource update from non-leader unit")
-            return
-
-        if self.safe_load_ceph_client_data():
-            self.configure_ceph_cli()
-            if not self._update_resources():
-                # No kubernetes resources exist yet. This is the first time that ceph-client
-                # relation has all the required data
-                all_resources = self.render_all_resource_definitions()
-                try:
-                    self.create_ceph_resources(all_resources)
-                except config.ConfigException:
-                    logger.info("KubeConfig not yet ready...")
-                    event.defer()
-                    return
-                except urllib3.exceptions.HTTPError:
-                    logger.info("ControlPlane not yet ready...")
-                    event.defer()
-                    return
-                self._stored.resources_created = True
-            self.unit.set_workload_version(self.manifest_version)
-            self.unit.status = UNIT_READY_STATUS
-
-    def _on_ceph_client_removed(self, event: RelationDepartedEvent) -> None:
-        """Remove resources when relation removed"""
-        self.purge_k8s_resources(event)
+    @needs_leader
+    def purge_k8s_resources(self, event: EventBase) -> None:
+        """Purge k8s resources created by this charm."""
+        logger.info("Removing Kubernetes resources.")
+        for controller in self.collector.manifests.values():
+            try:
+                controller.delete_manifests(ignore_unauthorized=True)
+            except ManifestClientError:
+                self.unit.status = WaitingStatus("Waiting for kube-apiserver")
+                event.defer()
+                return
         ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
         logger.warning(
             "Ceph pools %s wont be removed. If you want to clean up pools manually, use juju "
             "action 'delete-pool' on 'ceph-mon' units",
             ceph_pools,
         )
+        self.stored.deployed = False
 
-    @needs_leader
-    def purge_k8s_resources(self, _: RelationDepartedEvent) -> None:
-        """Purge k8s resources created by this charm."""
-        logger.info("Removing Kubernetes resources.")
-        for resource in self.resources:
-            try:
-                resource.remove()
-            except ApiException as exc:
-                if exc.status != 404:
-                    raise exc
-                logger.debug("Resource %s is already removed.", resource.name)
+    def _on_ceph_client_removed(self, event: EventBase) -> None:
+        """Remove resources when relation removed"""
+        self.purge_k8s_resources(event)
+        self._merge_config(event)
 
-        self._stored.resources_created = False
-        self.unit.status = BlockedStatus("Missing relations: ceph")
-
-    def _on_config_changed(self, _: ConfigChangedEvent) -> None:
-        """Handle configuration Change."""
-        if self.update_stored_state("default-storage", "default_storage_class"):
-            default_class = self.config.get("default-storage")
-            logger.info("Config changed. New value: 'default-storage' = '%s'", default_class)
-            try:
-                self.update_default_storage_class(default_class)
-            except ValueError:
-                self.unit.status = BlockedStatus(
-                    "{} 'default-storage'. See logs for more info.".format(BAD_CONFIG_PREFIX)
-                )
-                return
-
-        # Update resources if they are currently installed in cluster
-        self._update_resources()
-
-        # Resolve blocked state caused by bad configuration
-        status = self.unit.status
-        if isinstance(status, BlockedStatus) and status.message.startswith(BAD_CONFIG_PREFIX):
-            self.unit.status = UNIT_READY_STATUS
+    def _cleanup(self, event: EventBase) -> None:
+        """Remove resources when charm is stopped removed"""
+        if cast(int, self.stored.config_hash):
+            self.unit.status = MaintenanceStatus("Cleaning up...")
+            if self.purge_k8s_resources(event):
+                self.unit.status = MaintenanceStatus("Shutting down")
 
 
 if __name__ == "__main__":  # pragma: no cover
