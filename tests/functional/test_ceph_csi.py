@@ -125,11 +125,12 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
 
     async def assert_is_default_class(expected_default: str, api: client.StorageV1Api):
         for class_ in api.list_storage_class().items:
-            is_default = class_.metadata.annotations[default_property]
+            annotations = class_.metadata.annotations
+            is_default = annotations and annotations[default_property]
             if class_.metadata.name == expected_default:
                 assert is_default == "true"
             else:
-                assert is_default == "false"
+                assert is_default in ("false", None)
 
     default_property = "storageclass.kubernetes.io/is-default-class"
     expected_classes = ["ceph-xfs", "ceph-ext4"]

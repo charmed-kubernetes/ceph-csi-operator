@@ -21,7 +21,10 @@ options:
 
   cephfs-enable:
     default: false
-    description: "Whether or not cephfs manifests are installed"
+    description: |
+      Whether or not cephfs manifests should be installed
+
+      Only enable if ceph-fs is deployed and related to ceph-mon
     type: boolean
 
   cephfs-mounter:
@@ -42,7 +45,7 @@ options:
         juju config ceph-csi release='v3.7.2'
       
       A list of supported versions is available through the action:
-        juju run-action ceph-csi/leader list-releases --wait
+        juju run ceph-csi/leader list-releases
       
       To reset by to the latest supported by the charm use:
         juju config ceph-csi --reset release

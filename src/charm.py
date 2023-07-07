@@ -6,10 +6,8 @@
 import configparser
 import json
 import logging
-import pickle
 import subprocess
-from functools import wraps
-from hashlib import md5
+from functools import cached_property, wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, cast
 
@@ -18,12 +16,13 @@ from interface_ceph_client import ceph_client  # type: ignore
 from ops.charm import ActionEvent, CharmBase, EventBase
 from ops.framework import StoredState
 from ops.main import main
-from ops.manifests import Collector, ManifestClientError, Manifests
+from ops.manifests import Collector, ManifestClientError
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from cephfs_manifests import CephFSManifests
 from config_manifest import ConfigManifests
 from rbd_manifests import RBDManifests
+from safe_manifests import Manifests, SafeManifest
 
 logger = logging.getLogger(__name__)
 
@@ -47,19 +46,6 @@ def needs_leader(func: Callable) -> Callable:
         return None
 
     return leader_check
-
-
-class SafeManifest(Manifests):
-    @property
-    def config(self) -> Dict:
-        return {}
-
-    def hash(self) -> int:
-        """Calculate a hash of the current configuration."""
-        return int(md5(pickle.dumps(self.config)).hexdigest(), 16)
-
-    def evaluate(self) -> Optional[str]:
-        ...
 
 
 class CephCsiCharm(CharmBase):
@@ -142,12 +128,13 @@ class CephCsiCharm(CharmBase):
     def _update_status(self, _: EventBase) -> None:
         if not cast(bool, self.stored.deployed):
             return
+        self.unit.status = MaintenanceStatus("Updating Status")
 
         unready = self.collector.unready
         if unready:
             self.unit.status = WaitingStatus(", ".join(unready))
         else:
-            self.unit.status = ActiveStatus("Ready")
+            self.unit.status = ActiveStatus("Unit is ready")
             self.unit.set_workload_version(self.collector.short_version)
             if self.unit.is_leader():
                 self.app.status = ActiveStatus(self.collector.long_version)
@@ -250,14 +237,14 @@ class CephCsiCharm(CharmBase):
         """Get the hostNetwork enabling of csi-*plugin-provisioner deployments."""
         return bool(self.config.get("enable-host-networking"))
 
-    @property
+    @cached_property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
             "auth": self.auth,
             "fsid": self.get_ceph_fsid(),
             "kubernetes_key": self.key,
-            "mon_hosts": json.dumps(self.mon_hosts),
+            "mon_hosts": self.mon_hosts,
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
@@ -279,24 +266,24 @@ class CephCsiCharm(CharmBase):
             new_hash += manifest.hash()
 
         self.stored.deployed = False
-        if self._install_or_upgrade(event, config_hash=new_hash):
+        if self._install_manifests(event, config_hash=new_hash):
             self.stored.config_hash = new_hash
             self.stored.deployed = True
+        self._update_status(event)
 
     def _on_install_or_upgrade(self, event: EventBase) -> None:
-        self._install_or_upgrade(event)
-
-    def _install_or_upgrade(self, event: EventBase, config_hash: Optional[int] = None) -> bool:
         """Execute "on install" event callback."""
-        error = self._install_ceph_common()
-        error = error or self._check_required_relations()
-        self.stored.installed = not error
-
-        error or self._install_manifests(event, config_hash=config_hash)
-        return bool(error)
+        no_error = self._install_ceph_common()
+        no_error = no_error and self._check_required_relations()
+        current_hash = no_error and self._install_manifests(event)
+        self.stored.deployed = False
+        if current_hash:
+            self.stored.config_hash = current_hash
+            self.stored.deployed = True
 
     def _check_required_relations(self) -> bool:
         """Run check if any required relations are missing"""
+        self.unit.status = MaintenanceStatus("Checking Relations")
         required_relations = [self.CEPH_CLIENT_RELATION]
         missing_relations = [
             relation
@@ -311,23 +298,29 @@ class CephCsiCharm(CharmBase):
 
         return self.safe_load_ceph_client_data()
 
-    @needs_leader
-    def _install_manifests(self, event: EventBase, config_hash: Optional[int] = None) -> bool:
+    def _install_manifests(self, event: EventBase, config_hash: int = 0) -> int:
         if cast(int, self.stored.config_hash) == config_hash:
-            logger.info("Skipping until the config is evaluated.")
-            return True
+            logger.info(f"No config changes detected. config_hash={config_hash}")
+            return config_hash
         if self.unit.is_leader():
             self.unit.status = MaintenanceStatus("Deploying CephCSI")
             self.unit.set_workload_version("")
-            for controller in self.collector.manifests.values():
+            for manifest in self.collector.manifests.values():
                 try:
-                    controller.apply_manifests()
+                    manifest.apply_manifests()
                 except ManifestClientError as e:
                     self._ops_wait_for(event, "Waiting for kube-apiserver")
                     logger.warn(f"Encountered retryable installation error: {e}")
                     event.defer()
-                    return False
-        return True
+                    return 0
+
+            disable_cephfs = not self.config["cephfs-enable"]
+            if disable_cephfs and self._purge_manifest_by_name(event, "cephfs"):
+                # Failed to remove cephfs components when cephfs is disabled
+                # _purge should defer
+                return 0
+
+        return config_hash
 
     def safe_load_ceph_client_data(self) -> bool:
         """Load data from ceph-mon:client relation and store it in StoredState.
@@ -384,15 +377,11 @@ class CephCsiCharm(CharmBase):
         self.request_ceph_permissions()
 
     @needs_leader
-    def purge_k8s_resources(self, event: EventBase) -> None:
-        """Purge k8s resources created by this charm."""
-        logger.info("Removing Kubernetes resources.")
-        for controller in self.collector.manifests.values():
-            try:
-                controller.delete_manifests(ignore_unauthorized=True)
-            except ManifestClientError:
-                self.unit.status = WaitingStatus("Waiting for kube-apiserver")
-                event.defer()
+    def _purge_all_manifests(self, event: EventBase) -> None:
+        """Purge resources created by this charm."""
+        self.unit.status = MaintenanceStatus("Removing Kubernetes resources")
+        for manifest in self.collector.manifests.values():
+            if not self._purge_manifest(event, manifest):
                 return
         ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
         logger.warning(
@@ -402,16 +391,38 @@ class CephCsiCharm(CharmBase):
         )
         self.stored.deployed = False
 
+    def _purge_manifest_by_name(self, event: EventBase, name: str) -> bool:
+        """Purge resources created by this charm by manifest name."""
+        self.unit.status = MaintenanceStatus(f"Removing {name} resources")
+        for manifest in self.collector.manifests.values():
+            if manifest.name == name:
+                if not self._purge_manifest(event, manifest):
+                    return False
+        return True
+
+    def _purge_manifest(self, event: EventBase, manifest: Manifests) -> bool:
+        """Purge resources created by this charm by manifest."""
+        try:
+            manifest = cast(SafeManifest, manifest)
+            manifest.purgeable = True
+            manifest.delete_manifests(ignore_unauthorized=True, ignore_not_found=True)
+            manifest.purgeable = False
+        except ManifestClientError:
+            self.unit.status = WaitingStatus("Waiting for kube-apiserver")
+            event.defer()
+            return False
+        return True
+
     def _on_ceph_client_removed(self, event: EventBase) -> None:
         """Remove resources when relation removed"""
-        self.purge_k8s_resources(event)
+        self._purge_all_manifests(event)
         self._merge_config(event)
 
     def _cleanup(self, event: EventBase) -> None:
         """Remove resources when charm is stopped removed"""
         if cast(int, self.stored.config_hash):
             self.unit.status = MaintenanceStatus("Cleaning up...")
-            if self.purge_k8s_resources(event):
+            if self._purge_all_manifests(event):
                 self.unit.status = MaintenanceStatus("Shutting down")
 
 

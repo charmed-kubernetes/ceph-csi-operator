@@ -3,14 +3,17 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
 
-from charm import CephCsiCharm, SafeManifest
+from safe_manifests import SafeManifest
+
+if TYPE_CHECKING:
+    from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
 DEFAULT_NAMESPACE = "default"
@@ -36,7 +39,7 @@ class StorageSecret(Addition):
             log.error("secret data item is None")
             return None
 
-        log.info("Create secret data for rbd storage.")
+        log.info("Craft secret data for rbd storage.")
         ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
             dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
@@ -60,11 +63,11 @@ class CreateStorageClass(Addition):
             return None
 
         ns = self.manifests.config.get("namespace")
-        metadata = dict(name=f"ceph-{self.fs_type}", namespace=ns)
+        metadata: Dict[str, Any] = dict(name=f"ceph-{self.fs_type}")
         if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Creating storage class {metadata['name']}")
+        log.info(f"Craft storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
@@ -103,7 +106,7 @@ class ProvisionerAdjustments(Patch):
             obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
             log.info(f"Updating deployment replicas to {replica}")
 
-            obj.spec.template.spec.host_network = host_network = self.manifests.config.get(
+            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
                 "enable-host-networking"
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
@@ -112,7 +115,7 @@ class ProvisionerAdjustments(Patch):
 class RBDManifests(SafeManifest):
     """Deployment Specific details for the rbd.csi.ceph.com."""
 
-    def __init__(self, charm: CephCsiCharm):
+    def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
             "rbd",
             charm.model,

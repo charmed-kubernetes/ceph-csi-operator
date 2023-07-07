@@ -3,14 +3,19 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from lightkube.codecs import AnyResource
+from lightkube.models.core_v1 import Toleration
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
+from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
+from ops.manifests.manipulations import Subtraction
 
-from charm import CephCsiCharm, SafeManifest
+from safe_manifests import SafeManifest
+
+if TYPE_CHECKING:
+    from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
 DEFAULT_NAMESPACE = "default"
@@ -28,6 +33,10 @@ class StorageSecret(Addition):
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the secrets object for the deployment."""
+        if not self.manifests.config["enabled"]:
+            log.info("Ignore Cephfs Storage Secrets")
+            return None
+
         secret_config = {}
         for k, keys in self.REQUIRED_CONFIG.items():
             for secret_key in keys:
@@ -37,7 +46,7 @@ class StorageSecret(Addition):
             log.error("secret data item is None")
             return None
 
-        log.info("Create secret data for cephfs storage.")
+        log.info("Craft secret data for cephfs storage.")
         ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
             dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
@@ -49,11 +58,12 @@ class CreateStorageClass(Addition):
 
     REQUIRED_CONFIG = {"fsid", "fsname"}
 
-    def __init__(self, manifests: Manifests):
-        super().__init__(manifests)
-
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
+        if not self.manifests.config["enabled"]:
+            log.info("Ignore Cephfs Storage Class")
+            return None
+
         clusterID = self.manifests.config.get("fsid")
         if not clusterID:
             log.error("Storage clusterID unknown.")
@@ -62,11 +72,11 @@ class CreateStorageClass(Addition):
         fsname = self.manifests.config.get("fsname")
 
         ns = self.manifests.config.get("namespace")
-        metadata = dict(name="cephfs", namespace=ns)
+        metadata: Dict[str, Any] = dict(name="cephfs")
         if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Creating storage class {metadata['name']}")
+        log.info(f"Craft storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
             "fsName": fsname,
@@ -107,19 +117,27 @@ class ProvisionerAdjustments(Patch):
             obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
             log.info(f"Updating deployment replicas to {replica}")
 
-            obj.spec.template.spec.host_network = host_network = self.manifests.config.get(
+            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
                 "enable-host-networking"
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
         if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-cephfsplugin":
-            obj.spec.template.spec.tolerations = [{"operator": "Exists"}]
+            obj.spec.template.spec.tolerations = [Toleration(operator="Exists")]
             log.info("Updating daemonset tolerations to operator=Exists")
+
+
+class RemoveCephFS(Subtraction):
+    """Remove all Cephfs resources when disabled."""
+
+    def __call__(self, _obj: AnyResource) -> bool:
+        """Remove this obj if cephfs is not enabled."""
+        return not self.manifests.config["enabled"]
 
 
 class CephFSManifests(SafeManifest):
     """Deployment Specific details for the aws-ebs-csi-driver."""
 
-    def __init__(self, charm: CephCsiCharm):
+    def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
             "cephfs",
             charm.model,
@@ -129,7 +147,8 @@ class CephFSManifests(SafeManifest):
                 ManifestLabel(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
-                CreateStorageClass(self),  # creates cephfs
+                CreateStorageClass(self),  # creates cephfs storage class
+                RemoveCephFS(self),
             ],
         )
         self.charm = charm
@@ -149,10 +168,16 @@ class CephFSManifests(SafeManifest):
                 del config[key]
 
         config["release"] = config.pop("release", None)
+        config["enabled"] = self.purgeable or config.get("cephfs-enable", None)
         return config
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
+        if not self.config.get("cephfs-enable"):
+            # not enabled, not a problem
+            log.info("Skipping ceph-fs evaluation since its disabled")
+            return None
+
         props = StorageSecret.REQUIRED_CONFIG.keys() | CreateStorageClass.REQUIRED_CONFIG
         for prop in props:
             value = self.config.get(prop)

@@ -7,13 +7,16 @@ import contextlib
 import io
 import json
 import logging
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
 from ops.manifests import Addition, ManifestLabel
 
-from charm import CephCsiCharm, SafeManifest
+from safe_manifests import SafeManifest
+
+if TYPE_CHECKING:
+    from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
 DEFAULT_NAMESPACE = "default"
@@ -56,7 +59,7 @@ class CreateEncryptConfig(Addition):
     REQUIRED_CONFIG = set()
 
     def __call__(self) -> Optional[AnyResource]:
-        log.info(f"Create {self.NAME} ConfigMap.")
+        log.info(f"Craft {self.NAME} ConfigMap.")
         ns = self.manifests.config.get("namespace")
         data = {"config.json": "{}"}
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
@@ -80,7 +83,7 @@ class CreateCephCsiConfig(Addition):
             log.error(f"{self.__class__.__name__}: mon_hosts don't exist")
             return None
 
-        log.info(f"Create {self.NAME} ConfigMap.")
+        log.info(f"Craft {self.NAME} ConfigMap.")
         ns = self.manifests.config.get("namespace")
         config_json = [{"clusterID": fsid, "monitors": mon_hosts}]
         data = {"config.json": json.dumps(config_json)}
@@ -90,11 +93,11 @@ class CreateCephCsiConfig(Addition):
 class ConfigManifests(SafeManifest):
     """Deployment Specific details for the aws-ebs-csi-driver."""
 
-    def __init__(self, charm: CephCsiCharm):
+    def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
             "config",
             charm.model,
-            "/tmp/",  # there's no real manifest path
+            "config",
             [
                 CreateCephConfig(self),
                 CreateEncryptConfig(self),
@@ -118,7 +121,7 @@ class ConfigManifests(SafeManifest):
                 del config[key]
 
         # always selects a release where no manifest path exists
-        config["release"] = True
+        config["release"] = "v0"
         return config
 
     def evaluate(self) -> Optional[str]:
