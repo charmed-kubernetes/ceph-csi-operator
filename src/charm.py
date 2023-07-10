@@ -202,9 +202,7 @@ class CephCsiCharm(CharmBase):
     def write_ceph_cli_keyring(self) -> None:
         """Write Ceph CLI keyring file"""
         config = configparser.ConfigParser()
-        config[f"client.{self.app.name}"] = {
-            "key": self.key
-        }
+        config[f"client.{self.app.name}"] = {"key": self.key or ""}
         with Path(f"/etc/ceph/ceph.client.{self.app.name}.keyring").open("w") as fp:
             config.write(fp)
 
@@ -261,7 +259,7 @@ class CephCsiCharm(CharmBase):
             "fsname": self.get_ceph_fsname(),
         }
 
-    def _check_kube_config(self, event):
+    def _check_kube_config(self, event: EventBase) -> bool:
         self.unit.status = MaintenanceStatus("Evaluating kubernetes authentication.")
         try:
             KubeConfig.from_env()

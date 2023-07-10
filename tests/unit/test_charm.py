@@ -8,7 +8,6 @@ import logging
 import unittest.mock as mock
 
 import pytest
-from ops.model import BlockedStatus, MaintenanceStatus, WaitingStatus
 from ops.testing import Harness
 
 from charm import CephCsiCharm
@@ -58,7 +57,7 @@ def test_write_ceph_cli_config(harness):
                 "log file = /var/log/ceph.log",
                 "",
             ]
-            fp.write.assert_has_calls([mock.call(l+"\n") for l in lines])
+            fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
 
 
 def test_write_ceph_cli_keyring(harness):
@@ -71,12 +70,8 @@ def test_write_ceph_cli_keyring(harness):
         path = mock_path.return_value
         path.open.assert_called_once_with("w")
         with path.open() as fp:
-            lines = [
-                "[client.ceph-csi]",
-                "key = 12345",
-                ""
-            ]
-            fp.write.assert_has_calls([mock.call(l+"\n") for l in lines])
+            lines = ["[client.ceph-csi]", "key = 12345", ""]
+            fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
 
 
 @mock.patch("charm.CephCsiCharm.write_ceph_cli_config")
@@ -105,10 +100,7 @@ def test_ceph_context_getter(check_output, harness):
     harness.charm.stored.ceph_data["key"] = key
     harness.charm.stored.ceph_data["mon_hosts"] = monitors
 
-    check_output.side_effect = (
-        fsid.encode("UTF-8"),
-        "{}".encode("UTF-8")
-    )
+    check_output.side_effect = (fsid.encode("UTF-8"), "{}".encode("UTF-8"))
 
     # key and value format expected in context for Kubernetes templates.
     expected_context = {
@@ -119,13 +111,11 @@ def test_ceph_context_getter(check_output, harness):
         "user": "ceph-csi",
         "provisioner_replicas": 3,
         "enable_host_network": "false",
-        "fsname": None
+        "fsname": None,
     }
 
     assert harness.charm.ceph_context == expected_context
-    check_output.assert_any_call(
-        ["ceph", "--user", "ceph-csi", "fsid"], timeout=60
-    )
+    check_output.assert_any_call(["ceph", "--user", "ceph-csi", "fsid"], timeout=60)
     check_output.assert_any_call(
         ["ceph", "--user", "ceph-csi", "fs", "ls", "-f", "json"], timeout=60
     )
@@ -161,15 +151,11 @@ def test_required_relation_check(check_kube_config, harness):
     harness.charm.unit.status.name == "waiting"
     harness.charm.unit.status.message == "Ceph relation is missing data."
 
-    data = {
-        "auth": "some-auth",
-        "key": "1234",
-        "mon_hosts": '["10.0.0.1", "10.0.0.2"]'
-    }
+    data = {"auth": "some-auth", "key": "1234", "mon_hosts": '["10.0.0.1", "10.0.0.2"]'}
     harness.add_relation_unit(rel_id, "ceph-mon/0")
     harness.update_relation_data(rel_id, "ceph-mon/0", data)
     check_kube_config.assert_called_once()
-    
+
 
 @mock.patch("interface_ceph_client.ceph_client.CephClientRequires.request_ceph_permissions")
 @mock.patch("interface_ceph_client.ceph_client.CephClientRequires.create_replicated_pool")
@@ -179,7 +165,6 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
     """
     # Setup charm
     harness.begin()
-    
 
     # add ceph-client relation
     relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
@@ -204,11 +189,17 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
 
 
 @pytest.mark.parametrize("leadership", (False, True))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value = "12345"))
+@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli")
 @mock.patch("charm.CephCsiCharm._check_kube_config", return_value=True)
-def test_ceph_client_relation_changed_leader(check_kube_config, configure_ceph_cli, leadership, harness, lk_client, ):
+def test_ceph_client_relation_changed_leader(
+    check_kube_config,
+    configure_ceph_cli,
+    leadership,
+    harness,
+    lk_client,
+):
     """Test ceph-client-relation-changed hook on a leader unit"""
     harness.begin()
     rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
@@ -217,22 +208,26 @@ def test_ceph_client_relation_changed_leader(check_kube_config, configure_ceph_c
         "auth": "cephx",
         "key": "12345",
         "mon_hosts": '["10.0.0.1", "10.0.0.2"]',
-        "ceph-public-address": "10.0.0.1"
+        "ceph-public-address": "10.0.0.1",
     }
 
     harness.add_relation_unit(rel_id, "ceph-mon/0")
     configure_ceph_cli.assert_not_called()
     check_kube_config.assert_not_called()
     assert harness.charm.stored.ceph_data == {}
-    assert harness.charm.stored.deployed == False
+    assert not harness.charm.stored.deployed
     assert harness.charm.stored.config_hash == 0
     lk_client.apply.assert_not_called()
 
     harness.update_relation_data(rel_id, "ceph-mon/0", data)
     configure_ceph_cli.assert_called_once_with()
     check_kube_config.assert_called_once()
-    assert harness.charm.stored.ceph_data == {"auth": "cephx", "key": "12345", "mon_hosts": ["10.0.0.1"]}
-    assert harness.charm.stored.deployed == True
+    assert harness.charm.stored.ceph_data == {
+        "auth": "cephx",
+        "key": "12345",
+        "mon_hosts": ["10.0.0.1"],
+    }
+    assert harness.charm.stored.deployed
     assert harness.charm.stored.config_hash != 0
     if leadership:
         lk_client.apply.assert_called()
@@ -240,7 +235,7 @@ def test_ceph_client_relation_changed_leader(check_kube_config, configure_ceph_c
         lk_client.apply.assert_not_called()
 
 
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value = "12345"))
+@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm._check_kube_config", mock.MagicMock(return_value=True))
@@ -256,7 +251,7 @@ def test_ceph_client_relation_departed(harness, caplog):
         "auth": "cephx",
         "key": "12345",
         "mon_hosts": '["10.0.0.1", "10.0.0.2"]',
-        "ceph-public-address": "10.0.0.1"
+        "ceph-public-address": "10.0.0.1",
     }
     harness.add_relation_unit(rel_id, "ceph-mon/0")
     harness.update_relation_data(rel_id, "ceph-mon/0", data)
@@ -305,4 +300,3 @@ def test_safe_load_ceph_client_data(get_relation_data, harness):
     assert "auth" not in harness.charm.stored.ceph_data
     assert "key" not in harness.charm.stored.ceph_data
     assert "mon_hosts" not in harness.charm.stored.ceph_data
-
