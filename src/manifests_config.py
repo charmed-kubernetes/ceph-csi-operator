@@ -13,7 +13,7 @@ from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
 from ops.manifests import Addition, ManifestLabel
 
-from safe_manifests import SafeManifest
+from manifests_base import SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 DEFAULT_NAMESPACE = "default"
 
 
-class CreateCephConfig(Addition):
+class CephConfig(Addition):
     """Create configmap for the ceph-conf."""
 
     NAME = "ceph-config"
@@ -32,10 +32,10 @@ class CreateCephConfig(Addition):
         """Craft the configMap object."""
         auth = self.manifests.config.get("auth")
         if not auth:
-            log.error(f"{self.__class__.__name__}: auth is None")
+            log.error(f"{self.__class__.__name__} is missing required item: 'auth'")
             return None
 
-        log.info(f"Create {self.NAME} ConfigMap.")
+        log.info(f"Modelling configmap for {self.NAME}.")
         ns = self.manifests.config.get("namespace")
         config = configparser.ConfigParser()
         config["global"] = {
@@ -52,7 +52,7 @@ class CreateCephConfig(Addition):
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
 
 
-class CreateEncryptConfig(Addition):
+class EncryptConfig(Addition):
     """Create configmap for the ceph-csi-encryption-kms-config."""
 
     NAME = "ceph-csi-encryption-kms-config"
@@ -65,7 +65,7 @@ class CreateEncryptConfig(Addition):
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
 
 
-class CreateCephCsiConfig(Addition):
+class CephCsiConfig(Addition):
     """Create configmap for the ceph-csi-config."""
 
     NAME = "ceph-csi-config"
@@ -76,14 +76,14 @@ class CreateCephCsiConfig(Addition):
         mon_hosts = self.manifests.config.get("mon_hosts")
 
         if not fsid:
-            log.error(f"{self.__class__.__name__}: fsid is None")
+            log.error(f"{self.NAME} is missing required config item: 'fsid'")
             return None
 
         if not mon_hosts:
-            log.error(f"{self.__class__.__name__}: mon_hosts don't exist")
+            log.error(f"{self.NAME} is missing required config item: 'mon_hosts'")
             return None
 
-        log.info(f"Craft {self.NAME} ConfigMap.")
+        log.info(f"Modelling configmap for {self.NAME}.")
         ns = self.manifests.config.get("namespace")
         config_json = [{"clusterID": fsid, "monitors": mon_hosts}]
         data = {"config.json": json.dumps(config_json)}
@@ -99,9 +99,9 @@ class ConfigManifests(SafeManifest):
             charm.model,
             "config",
             [
-                CreateCephConfig(self),
-                CreateEncryptConfig(self),
-                CreateCephCsiConfig(self),
+                CephConfig(self),
+                EncryptConfig(self),
+                CephCsiConfig(self),
                 ManifestLabel(self),
             ],
         )
@@ -126,9 +126,9 @@ class ConfigManifests(SafeManifest):
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
-        props = CreateCephConfig.REQUIRED_CONFIG | CreateCephCsiConfig.REQUIRED_CONFIG
-        for prop in props:
+        props = CephConfig.REQUIRED_CONFIG | CephCsiConfig.REQUIRED_CONFIG
+        for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
-                return f"Config manifests waiting for definition of {prop}"
+                return f"Config manifests require the definition of '{prop}'"
         return None

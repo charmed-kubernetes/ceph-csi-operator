@@ -4,10 +4,15 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Collection of tests related to src/charm.py"""
 
+import json
 import logging
 import unittest.mock as mock
+from subprocess import SubprocessError
 
+import charms.operator_libs_linux.v0.apt as apt
 import pytest
+from lightkube.core.exceptions import ConfigError
+from ops.manifests import ManifestClientError
 from ops.testing import Harness
 
 from charm import CephCsiCharm
@@ -133,6 +138,30 @@ def test_install(relation_check, install_manifests, harness, mock_apt):
     install_manifests.assert_not_called()
 
 
+def test_install_pkg_missing(harness, mock_apt):
+    """Test that on.install hook will call expected methods"""
+    mock_apt.side_effect = apt.PackageNotFoundError
+
+    harness.begin()
+    harness.charm.on.install.emit()
+
+    mock_apt.assert_called_once_with(["ceph-common"], update_cache=True)
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Apt packages not found."
+
+
+def test_install_pkg_error(harness, mock_apt):
+    """Test that on.install hook will call expected methods"""
+    mock_apt.side_effect = apt.PackageError
+
+    harness.begin()
+    harness.charm.on.install.emit()
+
+    mock_apt.assert_called_once_with(["ceph-common"], update_cache=True)
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Could not apt install packages."
+
+
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm._check_kube_config", return_value=False)
 def test_required_relation_check(check_kube_config, harness):
@@ -142,14 +171,14 @@ def test_required_relation_check(check_kube_config, harness):
     harness.begin()
     assert not harness.charm._check_required_relations()
 
-    harness.charm.unit.status.name == "blocked"
-    harness.charm.unit.status.message == "Missing relations: ceph-client"
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Missing relations: ceph-client"
 
     rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
     assert not harness.charm._check_required_relations()
 
-    harness.charm.unit.status.name == "waiting"
-    harness.charm.unit.status.message == "Ceph relation is missing data."
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "Ceph relation is missing data."
 
     data = {"auth": "some-auth", "key": "1234", "mon_hosts": '["10.0.0.1", "10.0.0.2"]'}
     harness.add_relation_unit(rel_id, "ceph-mon/0")
@@ -235,18 +264,19 @@ def test_ceph_client_relation_changed_leader(
         lk_client.apply.assert_not_called()
 
 
+@pytest.mark.parametrize("leadership", (False, True))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm._check_kube_config", mock.MagicMock(return_value=True))
-def test_ceph_client_relation_departed(harness, caplog):
+def test_ceph_client_relation_departed(harness, caplog, leadership):
     """Test that warning is logged about ceph-pools not being cleaned up after rel. removal."""
 
     # Operator testing harness does not provide a helper to "remove relation" so for now we'll
     # invoke method manually
     harness.begin()
     rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    harness.set_leader(True)
+    harness.set_leader(leadership)
     data = {
         "auth": "cephx",
         "key": "12345",
@@ -258,12 +288,12 @@ def test_ceph_client_relation_departed(harness, caplog):
     caplog.clear()
 
     pools = ", ".join(CephCsiCharm.REQUIRED_CEPH_POOLS)
-    caplog.set_level(logging.WARNING)
-    expected_msg = (
-        f"Ceph pools {pools} wont be removed. If you want to clean up pools manually, "
-        "use juju action 'delete-pool' on 'ceph-mon' units"
-    )
+    caplog.set_level(logging.INFO)
     harness.charm._on_ceph_client_removed(mock.MagicMock())
+    if leadership:
+        expected_msg = f"Ceph pools {pools} wont be removed."
+    else:
+        expected_msg = "Execution of function '_purge_all_manifests' skipped"
     assert expected_msg in caplog.text
 
 
@@ -300,3 +330,122 @@ def test_safe_load_ceph_client_data(get_relation_data, harness):
     assert "auth" not in harness.charm.stored.ceph_data
     assert "key" not in harness.charm.stored.ceph_data
     assert "mon_hosts" not in harness.charm.stored.ceph_data
+
+
+@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
+def test_action_list_versions(harness):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    assert harness.charm._list_versions(mock_event) is None
+    expected_results = {
+        "cephfs-versions": "v3.7.2",
+        "config-versions": "",
+        "rbd-versions": "v3.7.2",
+    }
+    mock_event.set_results.assert_called_once_with(expected_results)
+
+
+@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
+@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
+@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
+def test_action_manifest_resources(harness):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    assert harness.charm._list_resources(mock_event) is None
+    expected_results = {
+        "config-missing": "ConfigMap/default/ceph-csi-encryption-kms-config",
+        "rbd-missing": "\n".join(
+            [
+                "ClusterRole/rbd-csi-nodeplugin",
+                "ClusterRole/rbd-external-provisioner-runner",
+                "ClusterRoleBinding/rbd-csi-nodeplugin",
+                "ClusterRoleBinding/rbd-csi-provisioner-role",
+                "DaemonSet/default/csi-rbdplugin",
+                "Deployment/default/csi-rbdplugin-provisioner",
+                "Role/default/rbd-external-provisioner-cfg",
+                "RoleBinding/default/rbd-csi-provisioner-role-cfg",
+                "Service/default/csi-metrics-rbdplugin",
+                "Service/default/csi-rbdplugin-provisioner",
+                "ServiceAccount/default/rbd-csi-nodeplugin",
+                "ServiceAccount/default/rbd-csi-provisioner",
+                "StorageClass/ceph-ext4",
+                "StorageClass/ceph-xfs",
+            ]
+        ),
+    }
+    mock_event.set_results.assert_called_once_with(expected_results)
+
+    mock_event.set_results.reset_mock()
+    assert harness.charm._scrub_resources(mock_event) is None
+    mock_event.set_results.assert_called_with(expected_results)
+
+    mock_event.set_results.reset_mock()
+    assert harness.charm._sync_resources(mock_event) is None
+    mock_event.set_results.assert_called_with(expected_results)
+
+
+@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
+@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
+@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
+def test_action_sync_resources_install_failure(harness, lk_client):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    expected_results = {"result": "Failed to apply missing resources. API Server unavailable."}
+    lk_client.apply.side_effect = ManifestClientError()
+    assert harness.charm._sync_resources(mock_event) is None
+    mock_event.set_results.assert_called_with(expected_results)
+
+
+def test_signal_unit_waiting_status(harness):
+    mock_event = mock.MagicMock()
+    harness.begin_with_initial_hooks()
+    harness.charm._ops_wait_for(mock_event, "time to wait")
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "time to wait"
+    mock_event.defer.assert_called_once()
+
+
+def test_signal_unit_blocked_status(harness, caplog):
+    harness.begin_with_initial_hooks()
+    caplog.set_level(logging.ERROR)
+    harness.charm._ops_blocked_by("time to block", exc_info=True)
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "time to block"
+    caplog.clear()
+
+
+@mock.patch("charm.CephCsiCharm.ceph_cli", mock.MagicMock(side_effect=SubprocessError))
+def test_failed_cli_fsid(harness):
+    harness.begin_with_initial_hooks()
+    assert harness.charm.get_ceph_fsid() == ""
+
+
+@pytest.mark.parametrize("failure", [SubprocessError, lambda *_: "invalid"])
+def test_failed_cli_fsname(harness, failure):
+    harness.begin_with_initial_hooks()
+    with mock.patch("charm.CephCsiCharm.ceph_cli", side_effect=failure):
+        assert harness.charm.get_ceph_fsname() is None
+
+
+def test_cli_fsname(request, harness):
+    harness.begin_with_initial_hooks()
+    pools = json.dumps([{"data_pools": ["ceph-fs_data"], "name": request.node.name}])
+    with mock.patch("charm.CephCsiCharm.ceph_cli", return_value=pools):
+        assert harness.charm.get_ceph_fsname() == request.node.name
+
+
+def test_check_kube_config(harness):
+    mock_event = mock.MagicMock()
+    harness.begin_with_initial_hooks()
+    with mock.patch("charm.KubeConfig.from_env", side_effect=ConfigError):
+        assert not harness.charm._check_kube_config(mock_event)
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "Waiting for kubeconfig"
+
+    with mock.patch("charm.KubeConfig.from_env"):
+        assert harness.charm._check_kube_config(mock_event)
+    assert harness.charm.unit.status.name == "maintenance"
+    assert harness.charm.unit.status.message == "Evaluating kubernetes authentication"

@@ -21,10 +21,10 @@ from ops.main import main
 from ops.manifests import Collector, ManifestClientError
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
-from cephfs_manifests import CephFSManifests
-from config_manifest import ConfigManifests
-from rbd_manifests import RBDManifests
-from safe_manifests import Manifests, SafeManifest
+from manifests_base import Manifests, SafeManifest
+from manifests_cephfs import CephFSManifests
+from manifests_config import ConfigManifests
+from manifests_rbd import RBDManifests
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ class CephCsiCharm(CharmBase):
             self._ops_blocked_by("Apt packages not found.", exc_info=True)
             return False
         except apt.PackageError:
-            self._ops_blocked_by("Could not apt install packages", exc_info=True)
+            self._ops_blocked_by("Could not apt install packages.", exc_info=True)
             return False
 
         return True
@@ -260,7 +260,7 @@ class CephCsiCharm(CharmBase):
         }
 
     def _check_kube_config(self, event: EventBase) -> bool:
-        self.unit.status = MaintenanceStatus("Evaluating kubernetes authentication.")
+        self.unit.status = MaintenanceStatus("Evaluating kubernetes authentication")
         try:
             KubeConfig.from_env()
         except ConfigError:

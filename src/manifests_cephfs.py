@@ -12,7 +12,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
 from ops.manifests.manipulations import Subtraction
 
-from safe_manifests import SafeManifest
+from manifests_base import SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
@@ -40,43 +40,49 @@ class StorageSecret(Addition):
         secret_config = {}
         for k, keys in self.REQUIRED_CONFIG.items():
             for secret_key in keys:
-                secret_config[secret_key] = self.manifests.config.get(k)
+                if value := self.manifests.config.get(k):
+                    secret_config[secret_key] = value
+                else:
+                    log.error(f"Cephfs is missing required secret item: '{k}'")
+                    return None
 
-        if any(s is None for s in secret_config.values()):
-            log.error("secret data item is None")
-            return None
-
-        log.info("Craft secret data for cephfs storage.")
+        log.info("Modelling secret data for cephfs storage.")
         ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
             dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
         )
 
 
-class CreateStorageClass(Addition):
+class CephStorageClass(Addition):
     """Create ceph storage classes."""
 
-    REQUIRED_CONFIG = {"fsid", "fsname"}
+    STORAGE_NAME = "cephfs"
+    REQUIRED_CONFIG = {"fsid"}
+    PROVISIONER = "cephfs.csi.ceph.com"
+    POOL = "ceph-fs-pool"
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
         if not self.manifests.config["enabled"]:
-            log.info("Ignore Cephfs Storage Class")
+            log.info("Ignore CephFS Storage Class")
             return None
 
         clusterID = self.manifests.config.get("fsid")
         if not clusterID:
-            log.error("Storage clusterID unknown.")
+            log.error("CephFS is missing required storage item: 'clusterID'")
             return None
 
         fsname = self.manifests.config.get("fsname")
+        if not fsname:
+            fsname = "default"
+            log.info("CephFS Storage Class using default fsName: 'default'")
 
-        ns = self.manifests.config.get("namespace")
-        metadata: Dict[str, Any] = dict(name="cephfs")
+        ns = self.manifests.config.get("namespace") or DEFAULT_NAMESPACE
+        metadata: Dict[str, Any] = dict(name=self.STORAGE_NAME)
         if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Craft storage class {metadata['name']}")
+        log.info(f"Modelling storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
             "fsName": fsname,
@@ -86,7 +92,7 @@ class CreateStorageClass(Addition):
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
             "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
-            "pool": "ceph-fs-pool",
+            "pool": self.POOL,
         }
         mounter = self.manifests.config.get("cephfs-mounter")
         if mounter in ["kernel", "fuse"]:
@@ -95,7 +101,7 @@ class CreateStorageClass(Addition):
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
-                provisioner="cephfs.csi.ceph.com",
+                provisioner=self.PROVISIONER,
                 allowVolumeExpansion=True,
                 mountOptions=["debug"],
                 reclaimPolicy="Delete",
@@ -147,7 +153,7 @@ class CephFSManifests(SafeManifest):
                 ManifestLabel(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
-                CreateStorageClass(self),  # creates cephfs storage class
+                CephStorageClass(self),
                 RemoveCephFS(self),
             ],
         )
@@ -173,14 +179,14 @@ class CephFSManifests(SafeManifest):
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
-        if not self.config.get("cephfs-enable"):
+        if not self.config.get("enabled"):
             # not enabled, not a problem
-            log.info("Skipping ceph-fs evaluation since its disabled")
+            log.info("Skipping CephFS evaluation since it's disabled")
             return None
 
-        props = StorageSecret.REQUIRED_CONFIG.keys() | CreateStorageClass.REQUIRED_CONFIG
-        for prop in props:
+        props = StorageSecret.REQUIRED_CONFIG.keys() | CephStorageClass.REQUIRED_CONFIG
+        for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
-                return f"Cephfs manifests waiting for definition of {prop}"
+                return f"CephFS manifests require the definition of '{prop}'"
         return None

@@ -10,14 +10,13 @@ from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
 
-from safe_manifests import SafeManifest
+from manifests_base import SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
 DEFAULT_NAMESPACE = "default"
-PROVISIONER = "rbd.csi.ceph.com"
 
 
 class StorageSecret(Addition):
@@ -32,42 +31,48 @@ class StorageSecret(Addition):
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the secrets object for the deployment."""
-        secret_config = {
-            new_k: self.manifests.config.get(k) for k, new_k in self.REQUIRED_CONFIG.items()
-        }
-        if any(s is None for s in secret_config.values()):
-            log.error("secret data item is None")
-            return None
+        secret_config = {}
+        for k, secret_key in self.REQUIRED_CONFIG.items():
+            if value := self.manifests.config.get(k):
+                secret_config[secret_key] = value
+            else:
+                log.error(f"RBD is missing required secret item: '{k}'")
+                return None
 
-        log.info("Craft secret data for rbd storage.")
+        log.info("Modelling secret data for rbd storage.")
         ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
             dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
         )
 
 
-class CreateStorageClass(Addition):
+class CephStorageClass(Addition):
     """Create ceph storage classes."""
 
     REQUIRED_CONFIG = {"fsid"}
+    PROVISIONER = "rbd.csi.ceph.com"
 
     def __init__(self, manifests: Manifests, fs_type: str):
         super().__init__(manifests)
         self.fs_type = fs_type
 
+    @property
+    def fs_name(self) -> str:
+        return f"ceph-{self.fs_type}"
+
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
         clusterID = self.manifests.config.get("fsid")
         if not clusterID:
-            log.error("Storage clusterID unknown.")
+            log.error(f"Ceph {self.fs_type.capitalize()} is missing required storage item: 'fsid'")
             return None
 
         ns = self.manifests.config.get("namespace")
-        metadata: Dict[str, Any] = dict(name=f"ceph-{self.fs_type}")
-        if self.manifests.config.get("default-storage") == metadata["name"]:
+        metadata: Dict[str, Any] = dict(name=self.fs_name)
+        if self.manifests.config.get("default-storage") == self.fs_name:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Craft storage class {metadata['name']}")
+        log.info(f"Modelling storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
@@ -84,7 +89,7 @@ class CreateStorageClass(Addition):
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
-                provisioner=PROVISIONER,
+                provisioner=self.PROVISIONER,
                 allowVolumeExpansion=True,
                 mountOptions=["discard"],
                 reclaimPolicy="Delete",
@@ -125,8 +130,8 @@ class RBDManifests(SafeManifest):
                 ManifestLabel(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
-                CreateStorageClass(self, "xfs"),  # creates ceph-xfs
-                CreateStorageClass(self, "ext4"),  # creates ceph-ext4
+                CephStorageClass(self, "xfs"),  # creates ceph-xfs
+                CephStorageClass(self, "ext4"),  # creates ceph-ext4
             ],
         )
         self.charm = charm
@@ -150,9 +155,9 @@ class RBDManifests(SafeManifest):
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
-        props = StorageSecret.REQUIRED_CONFIG.keys() | CreateStorageClass.REQUIRED_CONFIG
-        for prop in props:
+        props = StorageSecret.REQUIRED_CONFIG.keys() | CephStorageClass.REQUIRED_CONFIG
+        for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
-                return f"RBD manifests waiting for definition of {prop}"
+                return f"RBD manifests require the definition of '{prop}'"
         return None
