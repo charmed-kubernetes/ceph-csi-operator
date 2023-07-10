@@ -13,6 +13,7 @@ import charms.operator_libs_linux.v0.apt as apt
 import pytest
 from lightkube.core.exceptions import ConfigError
 from ops.manifests import ManifestClientError
+from ops.manifests.manipulations import AnyCondition
 from ops.testing import Harness
 
 from charm import CephCsiCharm
@@ -248,6 +249,10 @@ def test_ceph_client_relation_changed_leader(
     assert harness.charm.stored.config_hash == 0
     lk_client.apply.assert_not_called()
 
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "Ceph relation is missing data."
+
     harness.update_relation_data(rel_id, "ceph-mon/0", data)
     configure_ceph_cli.assert_called_once_with()
     check_kube_config.assert_called_once()
@@ -262,6 +267,28 @@ def test_ceph_client_relation_changed_leader(
         lk_client.apply.assert_called()
     else:
         lk_client.apply.assert_not_called()
+
+    # Fake a installed resource waiting to start
+    def mock_condition(*args, **kwargs):
+        obj = mock.MagicMock(spec=args[0])
+        obj.kind = args[0].__name__
+        obj.metadata.name = args[1]
+        obj.metadata.namespace = kwargs["namespace"]
+        if hasattr(obj, "status"):
+            obj.status.conditions = [AnyCondition(status="False", type="Ready")]
+        return obj
+
+    lk_client.get.side_effect = mock_condition
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == ", ".join(
+        [
+            "rbd: DaemonSet/default/csi-rbdplugin is not Ready",
+            "rbd: Deployment/default/csi-rbdplugin-provisioner is not Ready",
+            "rbd: Service/default/csi-metrics-rbdplugin is not Ready",
+            "rbd: Service/default/csi-rbdplugin-provisioner is not Ready",
+        ]
+    )
 
 
 @pytest.mark.parametrize("leadership", (False, True))
@@ -295,6 +322,17 @@ def test_ceph_client_relation_departed(harness, caplog, leadership):
     else:
         expected_msg = "Execution of function '_purge_all_manifests' skipped"
     assert expected_msg in caplog.text
+
+
+@mock.patch("charm.CephCsiCharm._purge_all_manifests")
+def test_cleanup(purge_all_manifests, harness, caplog):
+    harness.begin()
+    harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+    harness.charm.stored.deployed = True
+    caplog.set_level(logging.INFO)
+    event = mock.MagicMock()
+    harness.charm._cleanup(event)
+    purge_all_manifests.assert_called_once_with(event)
 
 
 @mock.patch("charm.ceph_client.CephClientRequires.get_relation_data")

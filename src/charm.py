@@ -442,7 +442,7 @@ class CephCsiCharm(CharmBase):
 
     def _cleanup(self, event: EventBase) -> None:
         """Remove resources when charm is stopped removed"""
-        if cast(int, self.stored.config_hash):
+        if cast(bool, self.stored.deployed):
             self.unit.status = MaintenanceStatus("Cleaning up...")
             if self._purge_all_manifests(event):
                 self.unit.status = MaintenanceStatus("Shutting down")
