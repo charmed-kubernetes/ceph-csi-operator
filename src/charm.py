@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional, cast
 
 import charms.operator_libs_linux.v0.apt as apt
 from interface_ceph_client import ceph_client  # type: ignore
+from lightkube import KubeConfig
+from lightkube.core.exceptions import ConfigError
 from ops.charm import ActionEvent, CharmBase, EventBase
 from ops.framework import StoredState
 from ops.main import main
@@ -77,6 +79,7 @@ class CephCsiCharm(CharmBase):
 
         self.framework.observe(self.on.install, self._on_install_or_upgrade)
         self.framework.observe(self.on.upgrade_charm, self._on_install_or_upgrade)
+        self.framework.observe(self.on.leader_elected, self._merge_config)
         self.framework.observe(self.on.config_changed, self._merge_config)
         self.framework.observe(self.on.stop, self._cleanup)
 
@@ -179,9 +182,9 @@ class CephCsiCharm(CharmBase):
         """Write Ceph CLI .conf file"""
         config = configparser.ConfigParser()
         config["global"] = {
-            "auth_cluster_required": self.auth or "",
-            "auth_service_required": self.auth or "",
-            "auth_client_required": self.auth or "",
+            "auth cluster required": self.auth or "",
+            "auth service required": self.auth or "",
+            "auth client required": self.auth or "",
             "keyring": "/etc/ceph/$cluster.$name.keyring",
             "mon host": " ".join(self.mon_hosts),
             "log to syslog": "true",
@@ -198,10 +201,12 @@ class CephCsiCharm(CharmBase):
 
     def write_ceph_cli_keyring(self) -> None:
         """Write Ceph CLI keyring file"""
-        ceph_keyring_path = "/etc/ceph/ceph.client.{}.keyring".format(self.app.name)
-        ceph_keyring = f"[client.{self.app.name}]\n\tkey = {self.key}\n"
-        with open(ceph_keyring_path, "w") as f:
-            f.write(ceph_keyring)
+        config = configparser.ConfigParser()
+        config[f"client.{self.app.name}"] = {
+            "key": self.key
+        }
+        with Path(f"/etc/ceph/ceph.client.{self.app.name}.keyring").open("w") as fp:
+            config.write(fp)
 
     def configure_ceph_cli(self) -> None:
         """Configure Ceph CLI"""
@@ -216,12 +221,17 @@ class CephCsiCharm(CharmBase):
 
     def get_ceph_fsid(self) -> str:
         """Get the Ceph FSID (cluster ID)"""
-        fsid = self.ceph_cli("fsid").strip()
-        return fsid
+        try:
+            return self.ceph_cli("fsid").strip()
+        except subprocess.SubprocessError:
+            return ""
 
-    def get_cephfs_fsname(self) -> str | None:
+    def get_ceph_fsname(self) -> Optional[str]:
         """Get the Ceph FS Name."""
-        data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
+        try:
+            data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
+        except (subprocess.SubprocessError, ValueError):
+            return None
         for fs in data:
             if "ceph-fs_data" in fs["data_pools"]:
                 return fs["name"]
@@ -248,11 +258,24 @@ class CephCsiCharm(CharmBase):
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
-            "fsname": self.get_cephfs_fsname(),
+            "fsname": self.get_ceph_fsname(),
         }
+
+    def _check_kube_config(self, event):
+        self.unit.status = MaintenanceStatus("Evaluating kubernetes authentication.")
+        try:
+            KubeConfig.from_env()
+        except ConfigError:
+            self.unit.status = WaitingStatus("Waiting for kubeconfig")
+            event.defer()
+            return False
+        return True
 
     def _merge_config(self, event: EventBase) -> None:
         if not self._check_required_relations():
+            return
+
+        if not self._check_kube_config(event):
             return
 
         self.unit.status = MaintenanceStatus("Evaluating Manifests")
@@ -281,23 +304,6 @@ class CephCsiCharm(CharmBase):
             self.stored.config_hash = current_hash
             self.stored.deployed = True
 
-    def _check_required_relations(self) -> bool:
-        """Run check if any required relations are missing"""
-        self.unit.status = MaintenanceStatus("Checking Relations")
-        required_relations = [self.CEPH_CLIENT_RELATION]
-        missing_relations = [
-            relation
-            for relation in required_relations
-            if self.model.get_relation(relation) is None
-        ]
-
-        if missing_relations:
-            evaluation = "Missing relations: {}".format(", ".join(missing_relations))
-            self.unit.status = BlockedStatus(evaluation)
-            return False
-
-        return self.safe_load_ceph_client_data()
-
     def _install_manifests(self, event: EventBase, config_hash: int = 0) -> int:
         if cast(int, self.stored.config_hash) == config_hash:
             logger.info(f"No config changes detected. config_hash={config_hash}")
@@ -315,12 +321,29 @@ class CephCsiCharm(CharmBase):
                     return 0
 
             disable_cephfs = not self.config["cephfs-enable"]
-            if disable_cephfs and self._purge_manifest_by_name(event, "cephfs"):
+            if disable_cephfs and not self._purge_manifest_by_name(event, "cephfs"):
                 # Failed to remove cephfs components when cephfs is disabled
                 # _purge should defer
                 return 0
 
         return config_hash
+
+    def _check_required_relations(self) -> bool:
+        """Run check if any required relations are missing"""
+        self.unit.status = MaintenanceStatus("Checking Relations")
+        required_relations = [self.CEPH_CLIENT_RELATION]
+        missing_relations = [
+            relation
+            for relation in required_relations
+            if self.model.get_relation(relation) is None
+        ]
+
+        if missing_relations:
+            evaluation = "Missing relations: {}".format(", ".join(missing_relations))
+            self.unit.status = BlockedStatus(evaluation)
+            return False
+
+        return self.safe_load_ceph_client_data()
 
     def safe_load_ceph_client_data(self) -> bool:
         """Load data from ceph-mon:client relation and store it in StoredState.
@@ -369,12 +392,13 @@ class CephCsiCharm(CharmBase):
         ]
         self.ceph_client.request_ceph_permissions(self.app.name, permissions)
 
-    def _on_ceph_client_broker_available(self, _: EventBase) -> None:
+    def _on_ceph_client_broker_available(self, event: EventBase) -> None:
         """Use ceph-mon:client relation to request creation of ceph-pools and
         ceph user permissions
         """
         self.request_ceph_pools()
         self.request_ceph_permissions()
+        self._merge_config(event)
 
     @needs_leader
     def _purge_all_manifests(self, event: EventBase) -> None:
