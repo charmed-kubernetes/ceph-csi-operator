@@ -53,7 +53,7 @@ async def cleanup_k8s(kube_config, namespace: str):
     yield  # act only on teardown
     config.load_kube_config(str(kube_config))
 
-    pod_prefixes = ["read-test-ceph-", "write-test-ceph"]
+    pod_prefixes = ["read-test-ceph", "write-test-ceph"]
     pvc_prefix = "pvc-test-"
     core_api = client.CoreV1Api()
 

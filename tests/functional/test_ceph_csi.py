@@ -24,6 +24,8 @@ READING_POD_TEMPLATE = "reading_pod.yaml.j2"
 WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 
 SUCCESS_POD_STATE = "Succeeded"
+CEPHFS_LS = dict(label_selector="juju.io/manifest=cephfs")
+RBD_LS = dict(label_selector="juju.io/manifest=rbd")
 
 
 @pytest.mark.abort_on_fail
@@ -68,7 +70,7 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     """Test that ceph-csi deployments run the correctly sized replicas."""
     config.load_kube_config(str(kube_config))
     apps_api = client.AppsV1Api()
-    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     k8s_workers = ops_test.model.applications["kubernetes-worker"]
     assert rbdplugin.status.replicas == 2  # from the test overlay.yaml
     # Due to anti-affinity rules on the control-plane, the ready replicas
@@ -77,8 +79,19 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
 
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
+@pytest.mark.usefixtures("cleanup_k8s", "ops_test")
 async def test_storage_class(
-    kube_config: Path, storage_class: str, namespace: str, cleanup_k8s: None, ops_test
+    kube_config: Path, storage_class: str, namespace: str
+):
+    """Test that ceph can be used to create persistent volume.
+
+    Isolated tests for xfs and ext4, cephfs comes later.
+    """
+    await run_test_storage_class(kube_config, storage_class, namespace)
+
+
+async def run_test_storage_class(
+    kube_config: Path, storage_class: str, namespace: str
 ):
     """Test that ceph can be used to create persistent volume.
 
@@ -180,10 +193,34 @@ async def test_host_networking(kube_config: Path, namespace: str, ops_test):
 
     await test_app.set_config({"enable-host-networking": "true"})
     await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
-    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network is True
 
     await test_app.set_config({"enable-host-networking": "false"})
     await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
-    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace).items
+    (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network in (None, False)
+
+
+@pytest.fixture()
+async def cephfs_enabled(ops_test):
+    """Fixture which enables/disable cephfs for a single test."""
+    test_app = ops_test.model.applications["ceph-csi"]
+    await test_app.set_config({"cephfs-enable": "true"})
+    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    yield
+    await test_app.set_config({"cephfs-enable": "false"})
+    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+
+
+@pytest.mark.usefixtures("cleanup_k8s", "cephfs_enabled")
+async def test_cephfs(kube_config: Path, namespace: str, ops_test):
+    """Test that ceph-csi deployments include cephfs."""
+    config.load_kube_config(str(kube_config))
+    apps_api = client.AppsV1Api()
+    k8s_workers = ops_test.model.applications["kubernetes-worker"]
+
+    (cephfsplugin,) = apps_api.list_namespaced_deployment(namespace, **CEPHFS_LS).items
+    assert cephfsplugin.status.ready_replicas == len(k8s_workers.units)
+
+    await run_test_storage_class(kube_config, "cephfs", namespace)
