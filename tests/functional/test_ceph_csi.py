@@ -80,9 +80,7 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
 @pytest.mark.usefixtures("cleanup_k8s", "ops_test")
-async def test_storage_class(
-    kube_config: Path, storage_class: str, namespace: str
-):
+async def test_storage_class(kube_config: Path, storage_class: str, namespace: str):
     """Test that ceph can be used to create persistent volume.
 
     Isolated tests for xfs and ext4, cephfs comes later.
@@ -90,9 +88,7 @@ async def test_storage_class(
     await run_test_storage_class(kube_config, storage_class, namespace)
 
 
-async def run_test_storage_class(
-    kube_config: Path, storage_class: str, namespace: str
-):
+async def run_test_storage_class(kube_config: Path, storage_class: str, namespace: str):
     """Test that ceph can be used to create persistent volume.
 
     This test has following flow:
