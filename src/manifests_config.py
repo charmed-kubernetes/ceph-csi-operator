@@ -7,19 +7,18 @@ import contextlib
 import io
 import json
 import logging
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
-from ops.manifests import Addition, ManifestLabel
+from ops.manifests import Addition, CreateNamespace, ManifestLabel
 
-from manifests_base import SafeManifest
+from manifests_base import AdjustNamespace, SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
-DEFAULT_NAMESPACE = "default"
 
 
 class CephConfig(Addition):
@@ -36,7 +35,6 @@ class CephConfig(Addition):
             return None
 
         log.info(f"Modelling configmap for {self.NAME}.")
-        ns = self.manifests.config.get("namespace")
         config = configparser.ConfigParser()
         config["global"] = {
             "auth_cluster_required": auth,
@@ -49,7 +47,7 @@ class CephConfig(Addition):
             output_text = sio.getvalue()
 
         data = {"ceph.conf": output_text, "keyring": ""}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
+        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 
 class EncryptConfig(Addition):
@@ -60,9 +58,8 @@ class EncryptConfig(Addition):
 
     def __call__(self) -> Optional[AnyResource]:
         log.info(f"Craft {self.NAME} ConfigMap.")
-        ns = self.manifests.config.get("namespace")
         data = {"config.json": "{}"}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
+        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 
 class CephCsiConfig(Addition):
@@ -84,25 +81,27 @@ class CephCsiConfig(Addition):
             return None
 
         log.info(f"Modelling configmap for {self.NAME}.")
-        ns = self.manifests.config.get("namespace")
         config_json = [{"clusterID": fsid, "monitors": mon_hosts}]
         data = {"config.json": json.dumps(config_json)}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME, namespace=ns), data=data))
+        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 
 class ConfigManifests(SafeManifest):
     """Deployment Specific details for the aws-ebs-csi-driver."""
 
     def __init__(self, charm: "CephCsiCharm"):
+        self.ns = cast(str, charm.stored.namespace)
         super().__init__(
             "config",
             charm.model,
-            "config",
+            "upstream/config",
             [
+                CreateNamespace(self, self.ns),
                 CephConfig(self),
                 EncryptConfig(self),
                 CephCsiConfig(self),
                 ManifestLabel(self),
+                AdjustNamespace(self),
             ],
         )
         self.charm = charm
@@ -111,8 +110,6 @@ class ConfigManifests(SafeManifest):
     def config(self) -> Dict:
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
-        config["namespace"] = DEFAULT_NAMESPACE
-
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.config)
 
@@ -122,6 +119,7 @@ class ConfigManifests(SafeManifest):
 
         # always selects a release where no manifest path exists
         config["release"] = "v0"
+        config["namespace"] = self.ns
         return config
 
     def evaluate(self) -> Optional[str]:

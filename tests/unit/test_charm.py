@@ -290,6 +290,15 @@ def test_ceph_client_relation_changed_leader(
         ]
     )
 
+    lk_client.get.side_effect = None
+    harness.update_config({"namespace": "different"})
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "blocked"
+    assert (
+        harness.charm.unit.status.message
+        == "Namespace 'default' cannot be configured to 'different'"
+    )
+
 
 @pytest.mark.parametrize("leadership", (False, True))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))

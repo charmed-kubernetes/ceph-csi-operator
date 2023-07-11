@@ -29,14 +29,14 @@ RBD_LS = dict(label_selector="juju.io/manifest=rbd")
 
 
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(ops_test):
+async def test_build_and_deploy(ops_test, namespace: str):
     """Build ceph-csi charm and deploy testing model."""
     charm = next(Path(".").glob("ceph-csi*.charm"), None)
     if not charm:
         logger.info("Building ceph-csi charm.")
         charm = await ops_test.build_charm(".")
 
-    bundle_vars = {"charm": charm.resolve()}
+    bundle_vars = {"charm": charm.resolve(), "namespace": namespace}
     proxy_settings = environ.get("TEST_HTTPS_PROXY")
     if proxy_settings:
         bundle_vars["https_proxy"] = proxy_settings
@@ -80,15 +80,15 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
 @pytest.mark.usefixtures("cleanup_k8s", "ops_test")
-async def test_storage_class(kube_config: Path, storage_class: str, namespace: str):
+async def test_storage_class(kube_config: Path, storage_class: str):
     """Test that ceph can be used to create persistent volume.
 
     Isolated tests for xfs and ext4, cephfs comes later.
     """
-    await run_test_storage_class(kube_config, storage_class, namespace)
+    await run_test_storage_class(kube_config, storage_class)
 
 
-async def run_test_storage_class(kube_config: Path, storage_class: str, namespace: str):
+async def run_test_storage_class(kube_config: Path, storage_class: str):
     """Test that ceph can be used to create persistent volume.
 
     This test has following flow:
@@ -106,6 +106,7 @@ async def run_test_storage_class(kube_config: Path, storage_class: str, namespac
     reading_pod = render_j2_template(
         TEMPLATE_DIR, READING_POD_TEMPLATE, storage_class=storage_class
     )
+    namespace = reading_pod["metadata"]["namespace"]
     reading_pod_name = reading_pod["metadata"]["name"]
     writing_pod = render_j2_template(
         TEMPLATE_DIR, WRITING_POD_TEMPLATE, storage_class=storage_class, data=test_payload
@@ -134,12 +135,13 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
 
     async def assert_is_default_class(expected_default: str, api: client.StorageV1Api):
         for class_ in api.list_storage_class().items:
+            sc = class_.metadata.name
             annotations = class_.metadata.annotations
             is_default = annotations and annotations[default_property]
-            if class_.metadata.name == expected_default:
-                assert is_default == "true"
+            if sc == expected_default:
+                assert is_default == "true", f"Expected to find {sc} as the default"
             else:
-                assert is_default in ("false", None)
+                assert is_default in ("false", None), f"Expected to find {sc} not the default"
 
     default_property = "storageclass.kubernetes.io/is-default-class"
     expected_classes = ["ceph-xfs", "ceph-ext4"]
@@ -219,4 +221,4 @@ async def test_cephfs(kube_config: Path, namespace: str, ops_test):
     (cephfsplugin,) = apps_api.list_namespaced_deployment(namespace, **CEPHFS_LS).items
     assert cephfsplugin.status.ready_replicas == len(k8s_workers.units)
 
-    await run_test_storage_class(kube_config, "cephfs", namespace)
+    await run_test_storage_class(kube_config, "cephfs")

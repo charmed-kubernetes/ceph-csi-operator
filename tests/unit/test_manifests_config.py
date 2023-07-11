@@ -47,17 +47,14 @@ def test_ceph_csi_config_modeled(caplog):
     assert f"{CephCsiConfig.NAME} is missing required config item: 'fsid'" in caplog.text
 
     caplog.clear()
-    alt_ns = "diff-ns"
     manifest.config = {
         "fsid": "abcd",
-        "namespace": alt_ns,
         "mon_hosts": ["10.10.10.1", "10.10.10.2"],
     }
 
     expected = ConfigMap(
         metadata=ObjectMeta(
             name=ccc.NAME,
-            namespace=alt_ns,
         ),
         data={"config.json": '[{"clusterID": "abcd", "monitors": ["10.10.10.1", "10.10.10.2"]}]'},
     )

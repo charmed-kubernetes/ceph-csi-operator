@@ -36,6 +36,7 @@ applications:
     options:
       provisioner-replicas: 2
       enable-host-networking: false
+      namespace: {{ namespace }}
 relations:
 - - ceph-osd
   - ceph-mon

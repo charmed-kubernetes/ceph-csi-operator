@@ -35,6 +35,18 @@ options:
       determined by probing for ceph-fuse and mount.ceph
     type: string
 
+  namespace:
+    type: string
+    default: ""
+    description: |
+      Kubernetes namespace in which to install the rbd and cephfs
+      components including deployments, daemonsets, secrets, configmaps.
+
+      if unspecified, "default" is assumed
+
+      NOTE: Can only be specified on deployment since some
+      attributes of kubernetes resources are not modifiable
+
   release:
     type: string
     description: |

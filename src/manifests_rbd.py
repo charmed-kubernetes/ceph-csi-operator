@@ -10,13 +10,12 @@ from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
 
-from manifests_base import SafeManifest
+from manifests_base import AdjustNamespace, SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
-DEFAULT_NAMESPACE = "default"
 
 
 class StorageSecret(Addition):
@@ -40,9 +39,8 @@ class StorageSecret(Addition):
                 return None
 
         log.info("Modelling secret data for rbd storage.")
-        ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
-            dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
+            dict(metadata=dict(name=self.SECRET_NAME), stringData=secret_config)
         )
 
 
@@ -67,7 +65,7 @@ class CephStorageClass(Addition):
             log.error(f"Ceph {self.fs_type.capitalize()} is missing required storage item: 'fsid'")
             return None
 
-        ns = self.manifests.config.get("namespace")
+        ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=self.fs_name)
         if self.manifests.config.get("default-storage") == self.fs_name:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
@@ -117,6 +115,17 @@ class ProvisionerAdjustments(Patch):
             log.info(f"Updating deployment hostNetwork to {host_network}")
 
 
+class RbacAdjustments(Patch):
+    """Update RBD RBAC Attributes."""
+
+    def __call__(self, obj: AnyResource) -> None:
+        ns = self.manifests.config["namespace"]
+        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
+            for each in obj.subjects:
+                if each.kind == "ServiceAccount":
+                    each.namespace = ns
+
+
 class RBDManifests(SafeManifest):
     """Deployment Specific details for the rbd.csi.ceph.com."""
 
@@ -132,6 +141,8 @@ class RBDManifests(SafeManifest):
                 ProvisionerAdjustments(self),
                 CephStorageClass(self, "xfs"),  # creates ceph-xfs
                 CephStorageClass(self, "ext4"),  # creates ceph-ext4
+                RbacAdjustments(self),
+                AdjustNamespace(self),
             ],
         )
         self.charm = charm
@@ -141,7 +152,6 @@ class RBDManifests(SafeManifest):
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
         config["image-registry"] = "rocks.canonical.com:443/cdk"
-        config["namespace"] = DEFAULT_NAMESPACE
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.config)
@@ -150,7 +160,8 @@ class RBDManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
-        config["release"] = config.pop("release", None)
+        config["release"] = config.get("release", None)
+        config["namespace"] = self.charm.stored.namespace
         return config
 
     def evaluate(self) -> Optional[str]:

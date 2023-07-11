@@ -29,10 +29,6 @@ from manifests_rbd import RBDManifests
 logger = logging.getLogger(__name__)
 
 
-UNIT_READY_STATUS = ActiveStatus("Unit is ready")
-BAD_CONFIG_PREFIX = "Bad configuration option for"
-
-
 def needs_leader(func: Callable) -> Callable:
     """Ensure that function with this decorator is executed only if on leader units."""
 
@@ -54,10 +50,8 @@ class CephCsiCharm(CharmBase):
     """Charm the service."""
 
     CEPH_CLIENT_RELATION = "ceph-client"
-    K8S_NS = "default"
-
-    DEFAULT_STORAGE = "ceph-xfs"
     REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
+    DEFAULT_NAMESPACE = "default"
 
     stored = StoredState()
 
@@ -86,12 +80,18 @@ class CephCsiCharm(CharmBase):
         self.stored.set_default(ceph_data={})
         self.stored.set_default(config_hash=0)  # hashed value of the provider config once valid
         self.stored.set_default(deployed=False)  # True if config has been applied after new hash
+        self.stored.set_default(namespace=self._configured_ns)
 
         self.collector = Collector(
             ConfigManifests(self),
             CephFSManifests(self),
             RBDManifests(self),
         )
+
+    @property
+    def _configured_ns(self) -> str:
+        """Currently configured namespace."""
+        return self.config["namespace"] or self.DEFAULT_NAMESPACE
 
     def _ops_wait_for(self, event: EventBase, msg: str) -> str:
         self.unit.status = WaitingStatus(msg)
@@ -134,8 +134,11 @@ class CephCsiCharm(CharmBase):
         self.unit.status = MaintenanceStatus("Updating Status")
 
         unready = self.collector.unready
+        current_ns, config_ns = self.stored.namespace, self._configured_ns
         if unready:
             self.unit.status = WaitingStatus(", ".join(unready))
+        elif current_ns != config_ns:
+            self._ops_blocked_by(f"Namespace '{current_ns}' cannot be configured to '{config_ns}'")
         else:
             self.unit.status = ActiveStatus("Unit is ready")
             self.unit.set_workload_version(self.collector.short_version)
@@ -314,7 +317,7 @@ class CephCsiCharm(CharmBase):
                     manifest.apply_manifests()
                 except ManifestClientError as e:
                     self._ops_wait_for(event, "Waiting for kube-apiserver")
-                    logger.warn(f"Encountered retryable installation error: {e}")
+                    logger.warning(f"Encountered retryable installation error: {e}")
                     event.defer()
                     return 0
 

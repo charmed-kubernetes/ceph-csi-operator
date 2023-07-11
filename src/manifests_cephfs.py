@@ -12,13 +12,12 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
 from ops.manifests.manipulations import Subtraction
 
-from manifests_base import SafeManifest
+from manifests_base import AdjustNamespace, SafeManifest
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
-DEFAULT_NAMESPACE = "default"
 
 
 class StorageSecret(Addition):
@@ -47,9 +46,8 @@ class StorageSecret(Addition):
                     return None
 
         log.info("Modelling secret data for cephfs storage.")
-        ns = self.manifests.config.get("namespace")
         return Secret.from_dict(
-            dict(metadata=dict(name=self.SECRET_NAME, namespace=ns), stringData=secret_config)
+            dict(metadata=dict(name=self.SECRET_NAME), stringData=secret_config)
         )
 
 
@@ -77,7 +75,7 @@ class CephStorageClass(Addition):
             fsname = "default"
             log.info("CephFS Storage Class using default fsName: 'default'")
 
-        ns = self.manifests.config.get("namespace") or DEFAULT_NAMESPACE
+        ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=self.STORAGE_NAME)
         if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
@@ -132,6 +130,17 @@ class ProvisionerAdjustments(Patch):
             log.info("Updating daemonset tolerations to operator=Exists")
 
 
+class RbacAdjustments(Patch):
+    """Update RBD RBAC Attributes."""
+
+    def __call__(self, obj: AnyResource) -> None:
+        ns = self.manifests.config["namespace"]
+        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
+            for each in obj.subjects:
+                if each.kind == "ServiceAccount":
+                    each.namespace = ns
+
+
 class RemoveCephFS(Subtraction):
     """Remove all Cephfs resources when disabled."""
 
@@ -154,7 +163,9 @@ class CephFSManifests(SafeManifest):
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
                 CephStorageClass(self),
+                RbacAdjustments(self),
                 RemoveCephFS(self),
+                AdjustNamespace(self),
             ],
         )
         self.charm = charm
@@ -164,7 +175,6 @@ class CephFSManifests(SafeManifest):
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
         config["image-registry"] = "rocks.canonical.com:443/cdk"
-        config["namespace"] = DEFAULT_NAMESPACE
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.config)
@@ -173,6 +183,7 @@ class CephFSManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
+        config["namespace"] = self.charm.stored.namespace
         config["release"] = config.pop("release", None)
         config["enabled"] = self.purgeable or config.get("cephfs-enable", None)
         return config
