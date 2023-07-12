@@ -122,8 +122,9 @@ class CephCsiCharm(CharmBase):
         resources = event.params.get("resources", "")
         try:
             self.collector.apply_missing_resources(event, manifests, resources)
-        except ManifestClientError:
-            msg = "Failed to apply missing resources. API Server unavailable."
+        except ManifestClientError as e:
+            msg = "Failed to sync missing resources: "
+            msg += " -> ".join(map(str, e.args))
             event.set_results({"result": msg})
         else:
             self.stored.deployed = True
@@ -316,7 +317,7 @@ class CephCsiCharm(CharmBase):
                 try:
                     manifest.apply_manifests()
                 except ManifestClientError as e:
-                    self._ops_wait_for(event, "Waiting for kube-apiserver")
+                    self._ops_wait_for(event, " -> ".join(map(str, e.args)))
                     logger.warning(f"Encountered retryable installation error: {e}")
                     event.defer()
                     return 0

@@ -440,8 +440,8 @@ def test_action_sync_resources_install_failure(harness, lk_client):
     harness.begin_with_initial_hooks()
 
     mock_event = mock.MagicMock()
-    expected_results = {"result": "Failed to apply missing resources. API Server unavailable."}
-    lk_client.apply.side_effect = ManifestClientError()
+    expected_results = {"result": "Failed to sync missing resources: API Server Unavailable"}
+    lk_client.apply.side_effect = ManifestClientError("API Server Unavailable")
     assert harness.charm._sync_resources(mock_event) is None
     mock_event.set_results.assert_called_with(expected_results)
 

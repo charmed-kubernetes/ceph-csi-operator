@@ -86,17 +86,24 @@ class CephCsiConfig(Addition):
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 
+class NonDefaultNamespace(CreateNamespace):
+    def __call__(self) -> Optional[AnyResource]:
+        """Take ownership to apply non-default namespace."""
+        parent = cast(CreateNamespace, super())
+        return parent() if self.namespace != "default" else None
+
+
 class ConfigManifests(SafeManifest):
     """Deployment Specific details for the aws-ebs-csi-driver."""
 
     def __init__(self, charm: "CephCsiCharm"):
-        self.ns = cast(str, charm.stored.namespace)
+        self.namespace = cast(str, charm.stored.namespace)
         super().__init__(
             "config",
             charm.model,
             "upstream/config",
             [
-                CreateNamespace(self, self.ns),
+                NonDefaultNamespace(self, self.namespace),
                 CephConfig(self),
                 EncryptConfig(self),
                 CephCsiConfig(self),
@@ -119,7 +126,7 @@ class ConfigManifests(SafeManifest):
 
         # always selects a release where no manifest path exists
         config["release"] = "v0"
-        config["namespace"] = self.ns
+        config["namespace"] = self.namespace
         return config
 
     def evaluate(self) -> Optional[str]:
