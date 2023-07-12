@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Dict, Optional, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
-from ops.manifests import Addition, CreateNamespace, ManifestLabel
+from ops.manifests import Addition, ManifestLabel
 
 from manifests_base import AdjustNamespace, SafeManifest
 
@@ -86,13 +86,6 @@ class CephCsiConfig(Addition):
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 
-class NonDefaultNamespace(CreateNamespace):
-    def __call__(self) -> Optional[AnyResource]:
-        """Take ownership to apply non-default namespace."""
-        parent = cast(CreateNamespace, super())
-        return parent() if self.namespace != "default" else None
-
-
 class ConfigManifests(SafeManifest):
     """Deployment Specific details for the aws-ebs-csi-driver."""
 
@@ -103,7 +96,6 @@ class ConfigManifests(SafeManifest):
             charm.model,
             "upstream/config",
             [
-                NonDefaultNamespace(self, self.namespace),
                 CephConfig(self),
                 EncryptConfig(self),
                 CephCsiConfig(self),

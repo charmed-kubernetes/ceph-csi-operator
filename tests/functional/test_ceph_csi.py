@@ -55,12 +55,33 @@ async def test_build_and_deploy(ops_test, namespace: str):
     assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
     logger.info(stdout)
 
-    await ops_test.model.block_until(lambda: "ceph-csi" in ops_test.model.applications, timeout=60)
-    await ops_test.model.wait_for_idle(wait_for_active=True, timeout=60 * 60, check_freq=5)
+    def ceph_csi_needs_namespace():
+        ceph_csi = ops_test.model.applications.get("ceph-csi")
+        expected = f'namespaces "{namespace}" not found'
+        if not ceph_csi:
+            logger.info("Waiting for ceph-csi app")
+        elif not ceph_csi.units:
+            logger.info("Waiting for ceph-csi units")
+        for unit in ceph_csi.units:
+            workload_status = unit.workload_status_message
+            if expected in workload_status:
+                return True
+            logger.info(f"Waiting for ceph-csi units status: {workload_status}")
+        return False
+
+    await ops_test.model.block_until(ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5)
 
 
-async def test_active_status(ops_test: OpsTest):
-    """Test that ceph-csi charm reached the active state."""
+async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTest):
+    """Test that ceph-csi charm reached the active state after creating namespace."""
+    config.load_kube_config(str(kube_config))
+    v1_core = client.CoreV1Api()
+    namespaces = [o.metadata.name for o in v1_core.list_namespace().items]
+    if namespace not in namespaces:
+        v1_namespace = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace))
+        v1_core.create_namespace(v1_namespace)
+
+    await ops_test.model.wait_for_idle(wait_for_active=True, timeout=10 * 60, check_freq=5)
     for unit in ops_test.model.applications["ceph-csi"].units:
         assert unit.workload_status == "active"
         assert unit.workload_status_message == "Unit is ready"

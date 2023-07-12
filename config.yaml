@@ -45,7 +45,8 @@ options:
       if unspecified, "default" is assumed
 
       NOTE: Can only be specified on deployment since some
-      attributes of kubernetes resources are not modifiable
+      attributes of kubernetes resources are non-modifiable.
+      The admin is responsible for creating the namespace.
 
   release:
     type: string
