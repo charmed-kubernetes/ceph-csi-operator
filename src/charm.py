@@ -22,7 +22,7 @@ from ops.manifests import Collector, ManifestClientError
 from ops.model import ActiveStatus, BlockedStatus, MaintenanceStatus, WaitingStatus
 
 from manifests_base import Manifests, SafeManifest
-from manifests_cephfs import CephFSManifests
+from manifests_cephfs import CephFSManifests, CephStorageClass
 from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
@@ -235,7 +235,7 @@ class CephCsiCharm(CharmBase):
         except (subprocess.SubprocessError, ValueError):
             return None
         for fs in data:
-            if "ceph-fs_data" in fs["data_pools"]:
+            if CephStorageClass.POOL in fs["data_pools"]:
                 return fs["name"]
         return None
 

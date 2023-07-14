@@ -4,6 +4,7 @@ metadata:
   name: pvc-test-{{ storage_class }}
   namespace: default
 spec:
+  storageClassName: {{ storage_class }}
   accessModes:
   - ReadWriteOnce
   resources:

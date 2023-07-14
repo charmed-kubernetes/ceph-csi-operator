@@ -81,7 +81,7 @@ def test_ceph_storage_class_modeled(caplog):
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
             "fsName": "default",
             "mounter": "fuse",
-            "pool": "ceph-fs-pool",
+            "pool": "ceph-fs_data",
         },
         allowVolumeExpansion=True,
         mountOptions=["debug"],

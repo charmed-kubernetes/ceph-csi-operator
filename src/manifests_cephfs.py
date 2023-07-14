@@ -57,7 +57,7 @@ class CephStorageClass(Addition):
     STORAGE_NAME = "cephfs"
     REQUIRED_CONFIG = {"fsid"}
     PROVISIONER = "cephfs.csi.ceph.com"
-    POOL = "ceph-fs-pool"
+    POOL = "ceph-fs_data"
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
