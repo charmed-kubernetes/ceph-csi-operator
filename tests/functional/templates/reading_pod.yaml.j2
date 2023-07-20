@@ -2,6 +2,7 @@ kind: Pod
 apiVersion: v1
 metadata:
   name: read-test-{{ storage_class }}
+  namespace: default
 spec:
   volumes:
   - name: shared-data

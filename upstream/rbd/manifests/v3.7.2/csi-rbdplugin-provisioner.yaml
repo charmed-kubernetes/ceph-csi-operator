@@ -15,6 +15,7 @@ spec:
       port: 8080
       protocol: TCP
       targetPort: 8680
+
 ---
 kind: Deployment
 apiVersion: apps/v1
@@ -23,7 +24,7 @@ metadata:
   # replace with non-default namespace name
   namespace: default
 spec:
-  replicas: {{ provisioner_replicas or 3 }}
+  replicas: 3
   selector:
     matchLabels:
       app: csi-rbdplugin-provisioner
@@ -43,14 +44,13 @@ spec:
                       - csi-rbdplugin-provisioner
               topologyKey: "kubernetes.io/hostname"
       serviceAccountName: rbd-csi-provisioner
-      hostNetwork: {{ enable_host_network }}
       priorityClassName: system-cluster-critical
       containers:
         - name: csi-provisioner
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-provisioner:v3.2.1
+          image: k8s.gcr.io/sig-storage/csi-provisioner:v3.2.1
           args:
             - "--csi-address=$(ADDRESS)"
-            - "--v=5"
+            - "--v=1"
             - "--timeout=150s"
             - "--retry-interval-start=500ms"
             - "--leader-election=true"
@@ -69,10 +69,10 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-snapshotter
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-snapshotter:v6.0.1
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v6.0.1
           args:
             - "--csi-address=$(ADDRESS)"
-            - "--v=5"
+            - "--v=1"
             - "--timeout=150s"
             - "--leader-election=true"
             - "--extra-create-metadata=true"
@@ -84,9 +84,9 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-attacher
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-attacher:v3.5.0
+          image: registry.k8s.io/sig-storage/csi-attacher:v3.5.0
           args:
-            - "--v=5"
+            - "--v=1"
             - "--csi-address=$(ADDRESS)"
             - "--leader-election=true"
             - "--retry-interval-start=500ms"
@@ -98,10 +98,10 @@ spec:
             - name: socket-dir
               mountPath: /csi
         - name: csi-resizer
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/sig-storage/csi-resizer:v1.5.0
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.5.0
           args:
             - "--csi-address=$(ADDRESS)"
-            - "--v=5"
+            - "--v=1"
             - "--timeout=150s"
             - "--leader-election"
             - "--retry-interval-start=500ms"
@@ -116,7 +116,7 @@ spec:
               mountPath: /csi
         - name: csi-rbdplugin
           # for stable functionality replace canary with latest release version
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.7.2
+          image: quay.io/cephcsi/cephcsi:v3.7.2
           args:
             - "--nodeid=$(NODE_ID)"
             - "--type=rbd"
@@ -173,7 +173,7 @@ spec:
               readOnly: true
         - name: csi-rbdplugin-controller
           # for stable functionality replace canary with latest release version
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.7.2
+          image: quay.io/cephcsi/cephcsi:v3.7.2
           args:
             - "--type=controller"
             - "--v=5"
@@ -194,7 +194,7 @@ spec:
             - name: ceph-config
               mountPath: /etc/ceph/
         - name: liveness-prometheus
-          image: {{ registry|default('rocks.canonical.com:443/cdk') }}/cephcsi/cephcsi:v3.7.2
+          image: quay.io/cephcsi/cephcsi:v3.7.2
           args:
             - "--type=liveness"
             - "--endpoint=$(CSI_ENDPOINT)"

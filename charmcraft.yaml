@@ -4,6 +4,8 @@ parts:
     build-packages: [git]
     charm-python-packages:
       - setuptools  # for jinja2
+    prime:
+      - upstream/**
 bases:
   - build-on:
     - name: "ubuntu"

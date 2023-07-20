@@ -14,10 +14,10 @@ from pytest_operator.plugin import OpsTest
 logger = logging.getLogger(__name__)
 
 
-@pytest.fixture(scope="session")
-def namespace() -> str:
-    """Return namespace used for functional tests."""
-    return "default"
+@pytest.fixture(scope="module")
+def namespace(ops_test) -> str:
+    """Return namespace used for ceph-csi installment."""
+    return ops_test.model_name
 
 
 @pytest.fixture(scope="module")
@@ -48,32 +48,33 @@ async def kube_config(ops_test: OpsTest) -> Path:
 
 
 @pytest.fixture()
-async def cleanup_k8s(kube_config, namespace: str):
+async def cleanup_k8s(kube_config):
     """Cleanup kubernetes resources created during test."""
     yield  # act only on teardown
     config.load_kube_config(str(kube_config))
 
-    pod_prefixes = ["read-test-ceph-", "write-test-ceph"]
+    pod_namespace = "default"
+    pod_prefixes = ["read-test-ceph", "write-test-ceph"]
     pvc_prefix = "pvc-test-"
     core_api = client.CoreV1Api()
 
-    for pod in core_api.list_namespaced_pod(namespace).items:
+    for pod in core_api.list_namespaced_pod(pod_namespace).items:
         pod_name = pod.metadata.name
         if any(pod_name.startswith(prefix) for prefix in pod_prefixes):
             try:
                 logger.info("Removing Pod %s", pod_name)
-                core_api.delete_namespaced_pod(pod_name, namespace)
+                core_api.delete_namespaced_pod(pod_name, pod_namespace)
             except client.ApiException as exc:
                 if exc.status != 404:
                     raise exc
                 logger.debug("Pod %s is already removed", pod_name)
 
-    for pvc in core_api.list_namespaced_persistent_volume_claim(namespace).items:
+    for pvc in core_api.list_namespaced_persistent_volume_claim(pod_namespace).items:
         pvc_name = pvc.metadata.name
         if pvc_name.startswith(pvc_prefix):
             try:
                 logger.info("Removing PersistentVolumeClaim %s", pvc_name)
-                core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
+                core_api.delete_namespaced_persistent_volume_claim(pvc_name, pod_namespace)
             except client.ApiException as exc:
                 if exc.status != 404:
                     raise exc
