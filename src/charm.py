@@ -77,6 +77,10 @@ class CephCsiCharm(CharmBase):
         self.framework.observe(self.on.config_changed, self._merge_config)
         self.framework.observe(self.on.stop, self._cleanup)
 
+        self.framework.observe(self.on.kubernetes_info_relation_joined, self._merge_config)
+        self.framework.observe(self.on.kubernetes_info_relation_changed, self._merge_config)
+        self.framework.observe(self.on.kubernetes_info_relation_broken, self._merge_config)
+
         self.stored.set_default(ceph_data={})
         self.stored.set_default(config_hash=0)  # hashed value of the provider config once valid
         self.stored.set_default(deployed=False)  # True if config has been applied after new hash
@@ -248,6 +252,22 @@ class CephCsiCharm(CharmBase):
     def enable_host_network(self) -> bool:
         """Get the hostNetwork enabling of csi-*plugin-provisioner deployments."""
         return bool(self.config.get("enable-host-networking"))
+
+    @property
+    def kubelet_dir(self) -> str:
+        """Get the kubelet directory from the kubernetes-info relation (if available)"""
+        relation = self.model.get_relation("kubernetes-info")
+        if relation is None or relation.app is None:
+            return "/var/lib/kubelet"
+
+        return relation.data[relation.app].get("kubelet-root-dir") or "/var/lib/kubelet"
+
+    @property
+    def kubernetes_context(self) -> Dict[str, Any]:
+        """Return context that can be used to render ceph resource files in templates/ folder."""
+        return {
+            "kubelet_dir": self.kubelet_dir,
+        }
 
     @cached_property
     def ceph_context(self) -> Dict[str, Any]:

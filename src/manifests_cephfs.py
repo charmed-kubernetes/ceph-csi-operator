@@ -129,6 +129,17 @@ class ProvisionerAdjustments(Patch):
             obj.spec.template.spec.tolerations = [Toleration(operator="Exists")]
             log.info("Updating daemonset tolerations to operator=Exists")
 
+            kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
+
+            for c in obj.spec.template.spec.containers:
+                c.args = [arg.replace("/var/lib/kubelet", kubelet_dir) for arg in c.args]
+                for m in c.volumeMounts:
+                    m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
+            for v in obj.spec.template.spec.volumes:
+                if v.hostPath:
+                    v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
+            log.info(f"Updating CephFS daemonset kubeletDir to {kubelet_dir}")
+
 
 class RbacAdjustments(Patch):
     """Update RBD RBAC Attributes."""
@@ -177,6 +188,7 @@ class CephFSManifests(SafeManifest):
         config["image-registry"] = "rocks.canonical.com:443/cdk"
 
         config.update(**self.charm.ceph_context)
+        config.update(**self.charm.kubernetes_context)
         config.update(**self.charm.config)
 
         for key, value in dict(**config).items():

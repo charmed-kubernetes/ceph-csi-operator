@@ -16,5 +16,8 @@ requires:
   kubernetes:
     interface: juju-info
     scope: container
+  kubernetes-info:
+    interface: kubernetes-info
+    scope: container
 
 subordinate: true
