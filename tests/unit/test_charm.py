@@ -327,7 +327,7 @@ def test_ceph_client_relation_departed(harness, caplog, leadership):
     caplog.set_level(logging.INFO)
     harness.charm._on_ceph_client_removed(mock.MagicMock())
     if leadership:
-        expected_msg = f"Ceph pools {pools} wont be removed."
+        expected_msg = f"Ceph pools {pools} won't be removed."
     else:
         expected_msg = "Execution of function '_purge_all_manifests' skipped"
     assert expected_msg in caplog.text

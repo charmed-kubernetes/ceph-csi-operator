@@ -1,5 +1,7 @@
 -r requirements.txt
 -r requirements-test.txt
+codespell
+ruff
 flake8
 mypy
 tox
