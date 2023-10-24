@@ -332,7 +332,7 @@ if __name__ == "__main__":
     image_set = set()
     for source in args.sources:
         version, source_images = main(source, registry, args.check, args.debug)
-        Path(FILEDIR, source, "version.txt").write_text(f"{version}\n")
+        Path(FILEDIR, source, "version").write_text(f"{version}\n")
         log.info(f"source: {source} latest={version}")
         image_set |= source_images
     log.info("images:")
