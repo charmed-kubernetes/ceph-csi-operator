@@ -84,7 +84,6 @@ def test_ceph_storage_class_modeled(caplog):
             "pool": "ceph-fs_data",
         },
         allowVolumeExpansion=True,
-        mountOptions=["debug"],
         reclaimPolicy="Delete",
     )
     assert csc() == expected

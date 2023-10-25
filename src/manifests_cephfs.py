@@ -101,7 +101,6 @@ class CephStorageClass(Addition):
                 metadata=metadata,
                 provisioner=self.PROVISIONER,
                 allowVolumeExpansion=True,
-                mountOptions=["debug"],
                 reclaimPolicy="Delete",
                 parameters=parameters,
             )
