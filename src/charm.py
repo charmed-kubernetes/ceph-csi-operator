@@ -431,7 +431,7 @@ class CephCsiCharm(CharmBase):
                 return
         ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
         logger.warning(
-            "Ceph pools %s wont be removed. If you want to clean up pools manually, use juju "
+            "Ceph pools %s won't be removed. If you want to clean up pools manually, use juju "
             "action 'delete-pool' on 'ceph-mon' units",
             ceph_pools,
         )

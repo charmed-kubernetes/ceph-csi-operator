@@ -327,7 +327,7 @@ def test_ceph_client_relation_departed(harness, caplog, leadership):
     caplog.set_level(logging.INFO)
     harness.charm._on_ceph_client_removed(mock.MagicMock())
     if leadership:
-        expected_msg = f"Ceph pools {pools} wont be removed."
+        expected_msg = f"Ceph pools {pools} won't be removed."
     else:
         expected_msg = "Execution of function '_purge_all_manifests' skipped"
     assert expected_msg in caplog.text
@@ -386,9 +386,9 @@ def test_action_list_versions(harness):
     mock_event = mock.MagicMock()
     assert harness.charm._list_versions(mock_event) is None
     expected_results = {
-        "cephfs-versions": "v3.7.2",
+        "cephfs-versions": "v3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
         "config-versions": "",
-        "rbd-versions": "v3.7.2",
+        "rbd-versions": "v3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
     }
     mock_event.set_results.assert_called_once_with(expected_results)
 
