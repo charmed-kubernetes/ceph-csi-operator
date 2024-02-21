@@ -18,8 +18,7 @@ class SafeManifest(Manifests):
     def config(self) -> Dict[str, Any]:
         return {}  # pragma: no cover
 
-    def evaluate(self) -> Optional[str]:
-        ...  # pragma: no cover
+    def evaluate(self) -> Optional[str]: ...  # pragma: no cover
 
 
 class AdjustNamespace(Patch):
