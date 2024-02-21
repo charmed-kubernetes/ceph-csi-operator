@@ -31,7 +31,7 @@ Deploy a Ceph cluster consisting of three monitor and three storage nodes:
  juju integrate ceph-osd:mon ceph-mon:osd
 ```
 
-The storage nodes above will have two 32GB devices for storage and 8GB for journalling.
+The storage nodes above will have two 32GB devices for storage and 8GB for journaling.
 As we have asked for 3 machines, this means a total of 192GB of storage and 24GB of
 journal space. The storage comes from whatever the default storage class is for the
 cloud (e.g., on AWS this will be EBS volumes).
@@ -118,7 +118,7 @@ environment. There are a few ways to run functional tests
 ```bash
 tox -e func                          # Deploys new juju model and runs tests
 tox -e func -- --model <model_name>  # Runs tests against existing model
-tox -e func -- --keep-models         # Does not tear down model after tests are done (usefull for debuging failing tests )
+tox -e func -- --keep-models         # Does not tear down model after tests are done (useful for debugging failing tests )
 ```
 
 **__NOTE:__** If the environment which runs functional tests is behind a http
