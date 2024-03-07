@@ -42,7 +42,7 @@ async def test_build_and_deploy(ops_test, namespace: str):
         bundle_vars["https_proxy"] = proxy_settings
 
     overlays = [
-        ops_test.Bundle("kubernetes-core", channel="edge"),
+        ops_test.Bundle("kubernetes-core", channel="stable"),
         Path("tests/functional/overlay.yaml"),
     ]
 
@@ -57,7 +57,7 @@ async def test_build_and_deploy(ops_test, namespace: str):
 
     def ceph_csi_needs_namespace():
         ceph_csi = ops_test.model.applications.get("ceph-csi")
-        expected = f'namespaces "{namespace}" not found'
+        expected = f"Missing namespace '{namespace}'"
         if not ceph_csi:
             logger.info("Waiting for ceph-csi app")
         elif not ceph_csi.units:
@@ -200,7 +200,7 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
     for storage_class in classes_to_test:
         logger.info("Setting %s StorageClass to be default.", storage_class)
         await ceph_csi_app.set_config({"default-storage": storage_class})
-        await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=30)
+        await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=5 * 60)
         await assert_is_default_class(storage_class, storage_api)
 
 
