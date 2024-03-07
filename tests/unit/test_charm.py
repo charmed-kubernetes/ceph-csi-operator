@@ -11,7 +11,7 @@ from subprocess import SubprocessError
 
 import charms.operator_libs_linux.v0.apt as apt
 import pytest
-from lightkube.core.exceptions import ConfigError
+from lightkube.core.exceptions import ApiError, ConfigError
 from ops.manifests import ManifestClientError
 from ops.manifests.manipulations import AnyCondition
 from ops.testing import Harness
@@ -222,9 +222,11 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli")
+@mock.patch("charm.CephCsiCharm._check_namespace", return_value=True)
 @mock.patch("charm.CephCsiCharm._check_kube_config", return_value=True)
 def test_ceph_client_relation_changed_leader(
     check_kube_config,
+    check_namespace,
     configure_ceph_cli,
     leadership,
     harness,
@@ -243,6 +245,7 @@ def test_ceph_client_relation_changed_leader(
 
     harness.add_relation_unit(rel_id, "ceph-mon/0")
     configure_ceph_cli.assert_not_called()
+    check_namespace.assert_not_called()
     check_kube_config.assert_not_called()
     assert harness.charm.stored.ceph_data == {}
     assert not harness.charm.stored.deployed
@@ -255,6 +258,7 @@ def test_ceph_client_relation_changed_leader(
 
     harness.update_relation_data(rel_id, "ceph-mon/0", data)
     configure_ceph_cli.assert_called_once_with()
+    check_namespace.assert_called_once()
     check_kube_config.assert_called_once()
     assert harness.charm.stored.ceph_data == {
         "auth": "cephx",
@@ -304,6 +308,7 @@ def test_ceph_client_relation_changed_leader(
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
+@mock.patch("charm.CephCsiCharm._check_namespace", mock.MagicMock(return_value=True))
 @mock.patch("charm.CephCsiCharm._check_kube_config", mock.MagicMock(return_value=True))
 def test_ceph_client_relation_departed(harness, caplog, leadership):
     """Test that warning is logged about ceph-pools not being cleaned up after rel. removal."""
@@ -496,3 +501,27 @@ def test_check_kube_config(harness):
         assert harness.charm._check_kube_config(mock_event)
     assert harness.charm.unit.status.name == "maintenance"
     assert harness.charm.unit.status.message == "Evaluating kubernetes authentication"
+
+
+def test_check_namespace(harness, lk_charm_client):
+    mock_event = mock.MagicMock()
+    harness.begin_with_initial_hooks()
+
+    api_error = ApiError(response=mock.MagicMock())
+
+    # should be blocked if the ns doesn't exist
+    api_error.status.message = "not found"
+    lk_charm_client.get.side_effect = api_error
+    assert not harness.charm._check_namespace(mock_event, "ns")
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Missing namespace 'ns'"
+
+    # should be in waiting if the k8s api isn't ready
+    api_error.status.message = "something else happened"
+    lk_charm_client.get.side_effect = api_error
+    assert not harness.charm._check_namespace(mock_event, "ns")
+    assert harness.charm.unit.status.name == "waiting"
+
+    # should be true if no api errors
+    lk_charm_client.get.side_effect = None
+    assert harness.charm._check_namespace(mock_event, "ns")

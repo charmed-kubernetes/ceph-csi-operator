@@ -13,8 +13,9 @@ from typing import Any, Callable, Dict, List, Optional, cast
 
 import charms.operator_libs_linux.v0.apt as apt
 from interface_ceph_client import ceph_client  # type: ignore
-from lightkube import KubeConfig
-from lightkube.core.exceptions import ConfigError
+from lightkube import Client, KubeConfig
+from lightkube.core.exceptions import ApiError, ConfigError
+from lightkube.resources.core_v1 import Namespace
 from ops.charm import ActionEvent, CharmBase, EventBase
 from ops.framework import StoredState
 from ops.main import main
@@ -270,6 +271,12 @@ class CephCsiCharm(CharmBase):
         }
 
     @cached_property
+    def _client(self) -> Client:
+        """Lightkube Client instance."""
+        client = Client(field_manager=f"{self.model.app.name}")
+        return client
+
+    @cached_property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
@@ -293,11 +300,30 @@ class CephCsiCharm(CharmBase):
             return False
         return True
 
+    def _check_namespace(self, event: EventBase, ns: str) -> bool:
+        try:
+            self._client.get(Namespace, name=ns)
+        except ApiError as e:
+            if "not found" in str(e.status.message):
+                logger.info(f"Namespace '{ns}' not found")
+                self._ops_blocked_by(f"Missing namespace '{ns}'")
+                event.defer()
+                return False
+            else:
+                # surface any other errors besides not found
+                logger.exception(e)
+                self._ops_wait_for(event, "Waiting for Kubernetes API")
+                return False
+        return True
+
     def _merge_config(self, event: EventBase) -> None:
         if not self._check_required_relations():
             return
 
         if not self._check_kube_config(event):
+            return
+
+        if not self._check_namespace(event, str(self.stored.namespace)):
             return
 
         self.unit.status = MaintenanceStatus("Evaluating Manifests")
