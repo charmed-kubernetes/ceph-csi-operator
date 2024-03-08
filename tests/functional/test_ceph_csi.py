@@ -93,9 +93,9 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     apps_api = client.AppsV1Api()
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     k8s_workers = ops_test.model.applications["kubernetes-worker"]
-    assert rbdplugin.status.replicas == 2  # from the test overlay.yaml
+    assert rbdplugin.status.replicas == 1  # from the test overlay.yaml
     # Due to anti-affinity rules on the control-plane, the ready replicas
-    # are limited to the number of worker nodes, of which there are 2
+    # are limited to the number of worker nodes, of which there are 1
     assert rbdplugin.status.ready_replicas == len(k8s_workers.units)
 
 
