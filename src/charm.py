@@ -295,18 +295,17 @@ class CephCsiCharm(CharmBase):
         try:
             KubeConfig.from_env()
         except ConfigError:
-            self.unit.status = WaitingStatus("Waiting for kubeconfig")
-            event.defer()
+            self._ops_wait_for(event, "Waiting for kubeconfig")
             return False
         return True
 
     def _check_namespace(self, event: EventBase, ns: str) -> bool:
+        self.unit.status = MaintenanceStatus("Evaluating namespace")
         try:
             self._client.get(Namespace, name=ns)
         except ApiError as e:
             if "not found" in str(e.status.message):
-                logger.info(f"Namespace '{ns}' not found")
-                self._ops_blocked_by(f"Missing namespace '{ns}'")
+                self._ops_blocked_by(f"Missing namespace '{ns}'", exc_info=True)
                 event.defer()
                 return False
             else:
@@ -314,6 +313,19 @@ class CephCsiCharm(CharmBase):
                 logger.exception(e)
                 self._ops_wait_for(event, "Waiting for Kubernetes API")
                 return False
+        return True
+
+    def _check_cephfs(self, event: EventBase) -> bool:
+        self.unit.status = MaintenanceStatus("Evaluating CephFS capability")
+        if not self.config["cephfs-enable"]:
+            # not enabled, not a problem
+            return True
+        if not self.ceph_context.get("fsname", None):
+            logger.error(
+                "Ceph CLI failed to find a CephFS fsname. Run 'juju config cephfs-enable=False' until ceph-fs is usable."
+            )
+            self._ops_blocked_by("CephFS is not usable; set 'cephfs-enable=False'")
+            return False
         return True
 
     def _merge_config(self, event: EventBase) -> None:
@@ -324,6 +336,9 @@ class CephCsiCharm(CharmBase):
             return
 
         if not self._check_namespace(event, str(self.stored.namespace)):
+            return
+
+        if not self._check_cephfs(event):
             return
 
         self.unit.status = MaintenanceStatus("Evaluating Manifests")

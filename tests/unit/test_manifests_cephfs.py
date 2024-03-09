@@ -60,6 +60,7 @@ def test_ceph_storage_class_modeled(caplog):
     manifest.config = {
         "enabled": True,
         "fsid": "abcd",
+        "fsname": "abcd",
         "namespace": alt_ns,
         "default-storage": CephStorageClass.STORAGE_NAME,
         "cephfs-mounter": "fuse",
@@ -79,7 +80,7 @@ def test_ceph_storage_class_modeled(caplog):
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
             "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
-            "fsName": "default",
+            "fsName": "abcd",
             "mounter": "fuse",
             "pool": "ceph-fs_data",
         },
@@ -87,7 +88,6 @@ def test_ceph_storage_class_modeled(caplog):
         reclaimPolicy="Delete",
     )
     assert csc() == expected
-    assert "CephFS Storage Class using default fsName" in caplog.text
     assert f"Modelling storage class {CephStorageClass.STORAGE_NAME}" in caplog.text
 
 
@@ -103,8 +103,15 @@ def test_manifest_evaluation(caplog):
 
     charm.config = {
         "cephfs-enable": True,
+        "fsid": "cluster",
+    }
+    assert manifests.evaluate() == "CephFS manifests require the definition of 'fsname'"
+
+    charm.config = {
+        "cephfs-enable": True,
         "user": "cephx",
         "fsid": "cluster",
+        "fsname": "abcd",
         "kubernetes_key": "123",
     }
     assert manifests.evaluate() is None
