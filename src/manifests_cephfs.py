@@ -55,7 +55,7 @@ class CephStorageClass(Addition):
     """Create ceph storage classes."""
 
     STORAGE_NAME = "cephfs"
-    REQUIRED_CONFIG = {"fsid"}
+    REQUIRED_CONFIG = {"fsid", "fsname"}
     PROVISIONER = "cephfs.csi.ceph.com"
     POOL = "ceph-fs_data"
 
@@ -72,8 +72,8 @@ class CephStorageClass(Addition):
 
         fsname = self.manifests.config.get("fsname")
         if not fsname:
-            fsname = "default"
-            log.info("CephFS Storage Class using default fsName: 'default'")
+            log.error("CephFS is missing required storage item: 'fsname'")
+            return None
 
         ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=self.STORAGE_NAME)
