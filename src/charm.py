@@ -96,7 +96,7 @@ class CephCsiCharm(CharmBase):
     @property
     def _configured_ns(self) -> str:
         """Currently configured namespace."""
-        return self.config["namespace"] or self.DEFAULT_NAMESPACE
+        return str(self.config.get("namespace") or self.DEFAULT_NAMESPACE)
 
     def _ops_wait_for(self, event: EventBase, msg: str) -> str:
         self.unit.status = WaitingStatus(msg)
