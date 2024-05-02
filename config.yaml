@@ -50,6 +50,7 @@ options:
 
   release:
     type: string
+    default: "v3.9.0"
     description: |
       Specify the version of ceph-csi as defined by the `release`
       tags of https://github.com/ceph/ceph-csi
@@ -58,7 +59,7 @@ options:
         juju config ceph-csi release='v3.7.2'
       
       A list of supported versions is available through the action:
-        juju run ceph-csi/leader list-releases
+        juju run ceph-csi/leader list-versions
       
       To reset by to the latest supported by the charm use:
         juju config ceph-csi --reset release
