@@ -528,23 +528,22 @@ def test_check_namespace(harness, lk_charm_client):
 
 
 def test_check_cephfs(harness):
-    mock_event = mock.MagicMock()
     harness.begin_with_initial_hooks()
 
     # no enable, no fsname -> no problem
     harness.update_config({"cephfs-enable": False})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": None}
-        assert harness.charm._check_cephfs(mock_event)
+        assert harness.charm._check_cephfs()
 
     # enable, fsname -> no problem
     harness.update_config({"cephfs-enable": True})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": "abcd"}
-        assert harness.charm._check_cephfs(mock_event)
+        assert harness.charm._check_cephfs()
 
     # enable, no fsname -> problem
     harness.update_config({"cephfs-enable": True})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": None}
-        assert not harness.charm._check_cephfs(mock_event)
+        assert not harness.charm._check_cephfs()
