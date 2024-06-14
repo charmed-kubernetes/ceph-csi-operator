@@ -16,7 +16,7 @@ from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
 from lightkube.core.exceptions import ApiError, ConfigError
 from lightkube.resources.core_v1 import Namespace
-from ops.charm import ActionEvent, CharmBase, EventBase
+from ops.charm import ActionEvent, CharmBase, EventBase, UpdateStatusEvent
 from ops.framework import StoredState
 from ops.main import main
 from ops.manifests import Collector, ManifestClientError
@@ -100,7 +100,8 @@ class CephCsiCharm(CharmBase):
 
     def _ops_wait_for(self, event: EventBase, msg: str) -> str:
         self.unit.status = WaitingStatus(msg)
-        event.defer()
+        if not isinstance(event, UpdateStatusEvent):
+            event.defer()
         return msg
 
     def _ops_blocked_by(self, msg: str, exc_info: bool = False) -> str:
@@ -134,8 +135,9 @@ class CephCsiCharm(CharmBase):
         else:
             self.stored.deployed = True
 
-    def _update_status(self, _: EventBase) -> None:
+    def _update_status(self, event: EventBase) -> None:
         if not cast(bool, self.stored.deployed):
+            self._merge_config(event)
             return
         self.unit.status = MaintenanceStatus("Updating Status")
 
@@ -231,16 +233,21 @@ class CephCsiCharm(CharmBase):
         try:
             return self.ceph_cli("fsid").strip()
         except subprocess.SubprocessError:
+            logger.error("get_ceph_fsid: Failed to get CephFS ID, reporting as empty string")
             return ""
 
     def get_ceph_fsname(self) -> Optional[str]:
         """Get the Ceph FS Name."""
         try:
             data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
-        except (subprocess.SubprocessError, ValueError):
+        except (subprocess.SubprocessError, ValueError) as e:
+            logger.error(
+                "get_ceph_fsname: Failed to get CephFS name, reporting as None, error: %s", e
+            )
             return None
         for fs in data:
             if CephStorageClass.POOL in fs["data_pools"]:
+                logger.error("get_ceph_fsname: got cephfs name: %s", fs["name"])
                 return fs["name"]
         return None
 
@@ -315,7 +322,7 @@ class CephCsiCharm(CharmBase):
                 return False
         return True
 
-    def _check_cephfs(self, event: EventBase) -> bool:
+    def _check_cephfs(self) -> bool:
         self.unit.status = MaintenanceStatus("Evaluating CephFS capability")
         if not self.config["cephfs-enable"]:
             # not enabled, not a problem
@@ -338,7 +345,7 @@ class CephCsiCharm(CharmBase):
         if not self._check_namespace(event, str(self.stored.namespace)):
             return
 
-        if not self._check_cephfs(event):
+        if not self._check_cephfs():
             return
 
         self.unit.status = MaintenanceStatus("Evaluating Manifests")
