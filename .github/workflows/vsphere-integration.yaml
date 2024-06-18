@@ -28,7 +28,7 @@ jobs:
           charmcraft-channel: "${{ steps.charmcraft.outputs.channel }}"
 
       - name: Run test
-        run: tox -e func -- --basetemp=/home/ubuntu/pytest
+        run: tox -e integration -- --basetemp=/home/ubuntu/pytest
 
       - name: Setup Debug Artifact Collection
         if: ${{ failure() }}
@@ -41,7 +41,7 @@ jobs:
           mv juju-crashdump-* tmp/ | true
       - name: Upload debug artifacts
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-run-artifacts
           path: tmp
