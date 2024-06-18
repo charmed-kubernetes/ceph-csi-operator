@@ -4,17 +4,16 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Collection of tests related to src/charm.py"""
 
+import contextlib
 import json
-import logging
 import unittest.mock as mock
 from subprocess import SubprocessError
 
 import charms.operator_libs_linux.v0.apt as apt
 import pytest
-from lightkube.core.exceptions import ApiError, ConfigError
+from lightkube.core.exceptions import ApiError
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ManifestClientError
-from ops.manifests.manipulations import AnyCondition
 from ops.testing import Harness
 
 from charm import CephCsiCharm
@@ -38,16 +37,18 @@ def ceph_conf_directory(tmp_path):
 
 @pytest.fixture(autouse=True)
 def mock_apt():
-    with mock.patch("charms.operator_libs_linux.v0.apt.add_package", autospec=True) as mock_apt:
+    with mock.patch(
+        "charms.operator_libs_linux.v0.apt.DebianPackage.from_system", autospec=True
+    ) as mock_apt:
         yield mock_apt
 
 
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
 @mock.patch("charm.ceph_config_file")
-def test_write_ceph_cli_config(ceph_config_file, harness, ceph_conf_directory):
+def test_write_ceph_cli_config(ceph_config_file, ceph_data, harness, ceph_conf_directory):
     """Test writing of Ceph CLI config"""
     harness.begin()
-    harness.charm.stored.ceph_data["auth"] = "cephx"
-    harness.charm.stored.ceph_data["mon_hosts"] = ["10.0.0.1", "10.0.0.2"]
+    ceph_data.return_value = {"auth": "cephx", "mon_hosts": ["10.0.0.1", "10.0.0.2"]}
     harness.charm.write_ceph_cli_config()
     path = ceph_config_file.return_value
     path.open.assert_called_once_with("w")
@@ -74,11 +75,12 @@ def test_write_ceph_cli_config(ceph_config_file, harness, ceph_conf_directory):
         fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
 
 
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
 @mock.patch("charm.ceph_keyring_file")
-def test_write_ceph_cli_keyring(ceph_keyring_file, harness):
+def test_write_ceph_cli_keyring(ceph_keyring_file, ceph_data, harness):
     """Test writing of Ceph CLI keyring file"""
     harness.begin()
-    harness.charm.stored.ceph_data["key"] = "12345"
+    ceph_data.return_value = {"key": "12345"}
     harness.charm.write_ceph_cli_keyring()
     ceph_keyring_file.return_value.open.assert_called_once_with("w")
     with ceph_keyring_file.return_value.open() as fp:
@@ -101,7 +103,8 @@ def test_configure_ceph_cli(ceph_config_dir, keyring, config, harness):
 
 
 @mock.patch("subprocess.check_output")
-def test_ceph_context_getter(check_output, harness, ceph_conf_directory):
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_directory):
     """Test that ceph_context property returns properly formatted data."""
     fsid = "12345"
     key = "secret_key"
@@ -109,9 +112,11 @@ def test_ceph_context_getter(check_output, harness, ceph_conf_directory):
 
     # stored data from ceph-mon:client relation
     harness.begin()
-    harness.charm.stored.ceph_data["key"] = key
-    harness.charm.stored.ceph_data["mon_hosts"] = monitors
-
+    ceph_data.return_value = {
+        "auth": None,
+        "key": key,
+        "mon_hosts": monitors,
+    }
     check_output.side_effect = (fsid.encode("UTF-8"), "{}".encode("UTF-8"))
 
     # key and value format expected in context for Kubernetes templates.
@@ -137,16 +142,62 @@ def test_ceph_context_getter(check_output, harness, ceph_conf_directory):
     )
 
 
-@mock.patch("charm.CephCsiCharm._install_manifests")
-@mock.patch("charm.CephCsiCharm._check_required_relations", return_value=False)
-def test_install(relation_check, install_manifests, harness, mock_apt):
+@contextlib.contextmanager
+def reconcile_this(harness, method):
+    previous = harness.charm.reconciler.reconcile_function
+    harness.charm.reconciler.reconcile_function = method
+    yield
+    harness.charm.reconciler.reconcile_function = previous
+
+
+@contextlib.contextmanager
+def mocked_handlers():
+    handler_names = [
+        "_destroying",
+        "install_ceph_common",
+        "check_kube_config",
+        "check_namespace",
+        "check_ceph_client",
+        "configure_ceph_cli",
+        "check_cephfs",
+        "evaluate_manifests",
+        "install_manifests",
+        "_update_status",
+    ]
+
+    handlers = [mock.patch(f"charm.CephCsiCharm.{name}") for name in handler_names]
+    yield dict(zip(handler_names, (h.start() for h in handlers)))
+    for handler in handlers:
+        handler.stop()
+
+
+def test_set_leader(harness):
+    """Test emitting the set_leader hook while not reconciled.
+
+    Args:
+        harness: the harness under test
+    """
+    harness.begin()
+    harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
+    with mocked_handlers() as handlers:
+        handlers["_destroying"].return_value = False
+        handlers["check_cephfs"].return_value = False
+        harness.set_leader(True)
+    assert harness.charm.unit.status.name == "active"
+    assert harness.charm.unit.status.message == "Ready"
+    assert harness.charm.reconciler.stored.reconciled
+    not_called = {name: h for name, h in handlers.items() if not h.called}
+    assert not_called == {}
+
+
+def test_install(harness, mock_apt):
     """Test that on.install hook will call expected methods"""
     harness.begin()
-    harness.charm.on.install.emit()
+    with reconcile_this(harness, harness.charm.install_ceph_common):
+        harness.charm.on.install.emit()
 
-    mock_apt.assert_called_once_with(["ceph-common"], update_cache=True)
-    relation_check.assert_called_once_with()
-    install_manifests.assert_not_called()
+    mock_apt.assert_called_once_with("ceph-common")
+    mock_apt.return_value.ensure.assert_called_once_with(apt.PackageState.Latest)
 
 
 def test_install_pkg_missing(harness, mock_apt):
@@ -154,47 +205,165 @@ def test_install_pkg_missing(harness, mock_apt):
     mock_apt.side_effect = apt.PackageNotFoundError
 
     harness.begin()
-    harness.charm.on.install.emit()
+    with reconcile_this(harness, harness.charm.install_ceph_common):
+        harness.charm.on.install.emit()
 
-    mock_apt.assert_called_once_with(["ceph-common"], update_cache=True)
+    mock_apt.assert_called_once_with("ceph-common")
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Apt packages not found."
+    assert harness.charm.unit.status.message == "Failed to install ceph-common apt package."
 
 
-def test_install_pkg_error(harness, mock_apt):
-    """Test that on.install hook will call expected methods"""
-    mock_apt.side_effect = apt.PackageError
-
+@mock.patch("charm.KubeConfig.from_env", mock.MagicMock(side_effect=FileNotFoundError))
+def test_check_kubeconfig(harness):
+    """Test that check_kube_config method returns True if kubeconfig is available."""
     harness.begin()
-    harness.charm.on.install.emit()
+    with reconcile_this(harness, lambda _: harness.charm.check_kube_config()):
+        harness.charm.on.install.emit()
 
-    mock_apt.assert_called_once_with(["ceph-common"], update_cache=True)
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "Waiting for kubeconfig"
+
+
+def test_check_namespace(harness, lk_charm_client):
+    harness.begin()
+
+    api_error = ApiError(response=mock.MagicMock())
+
+    # should be blocked if the ns doesn't exist
+    api_error.status.message = "not found"
+    lk_charm_client.get.side_effect = api_error
+
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Could not apt install packages."
+    assert harness.charm.unit.status.message == "Missing namespace 'default'"
+
+    # should be in waiting if the k8s api isn't ready
+    api_error.status.message = "something else happened"
+    lk_charm_client.get.side_effect = api_error
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
+    assert harness.charm.unit.status.name == "waiting"
+
+    # should be true if no api errors
+    lk_charm_client.get.side_effect = None
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
+    assert harness.charm.unit.status.name == "active"
 
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-@mock.patch("charm.CephCsiCharm._check_kube_config", return_value=False)
-def test_required_relation_check(check_kube_config, harness):
-    """Test that check_required_relations sets expected unit states."""
+def test_check_ceph_client(harness):
+    """Test that check_ceph_client sets expected unit states."""
 
     # Add ceph-mon relation, indicating existing relations
     harness.begin()
-    assert not harness.charm._check_required_relations()
+
+    with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
+        harness.charm.on.install.emit()
 
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Missing relations: ceph-client"
+    assert harness.charm.unit.status.message == "Missing relation: ceph-client"
 
-    rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    assert not harness.charm._check_required_relations()
+    with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
+        rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
 
     assert harness.charm.unit.status.name == "waiting"
     assert harness.charm.unit.status.message == "Ceph relation is missing data."
 
-    data = {"auth": "some-auth", "key": "1234", "mon_hosts": '["10.0.0.1", "10.0.0.2"]'}
-    harness.add_relation_unit(rel_id, "ceph-mon/0")
-    harness.update_relation_data(rel_id, "ceph-mon/0", data)
-    check_kube_config.assert_called_once()
+    data = {"auth": "some-auth", "key": "1234", "ceph-public-address": "10.0.0.1"}
+    with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
+        harness.add_relation_unit(rel_id, "ceph-mon/0")
+        harness.update_relation_data(rel_id, "ceph-mon/0", data)
+    assert harness.charm.unit.status.name == "active"
+    assert harness.charm.ceph_data == {
+        "auth": "some-auth",
+        "key": "1234",
+        "mon_hosts": ["10.0.0.1"],
+    }
+
+
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_evaluate_manifests_blocks(ceph_context, harness):
+    """Test that evaluate_manifests sets expected unit states."""
+    harness.begin()
+    ceph_context.return_value = {"fsid": "12345", "kubernetes_key": "123"}
+    with reconcile_this(harness, lambda _: harness.charm.evaluate_manifests()):
+        harness.charm.on.install.emit()
+
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Config manifests require the definition of 'auth'"
+
+
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_evaluate_manifests_ready(ceph_context, harness):
+    """Test that evaluate_manifests sets expected unit states."""
+    harness.begin()
+    ceph_context.return_value = {
+        "auth": "cephx",
+        "fsid": "12345",
+        "kubernetes_key": "123",
+        "mon_hosts": ["10.0.0.1"],
+        "user": "ceph-csi",
+        "provisioner_replicas": 3,
+        "enable_host_network": "false",
+        "fsname": None,
+    }
+    with reconcile_this(harness, lambda _: harness.charm.evaluate_manifests()):
+        harness.charm.on.install.emit()
+
+    assert harness.charm.unit.status.name == "active"
+
+
+def test_install_manifests_unchanged(harness):
+    """Test that install_manifests detects no changes."""
+    harness.begin()
+    config_hash = harness.charm.stored.config_hash = 1
+    with reconcile_this(harness, lambda _: harness.charm.install_manifests(config_hash)):
+        harness.charm.on.install.emit()
+
+    assert harness.charm.unit.status.name == "active"
+
+
+def test_install_manifests_non_leader(harness):
+    """Test that install_manifests idle on non-leaders."""
+    harness.begin()
+    harness.charm.stored.config_hash = 1
+    with reconcile_this(harness, lambda _: harness.charm.install_manifests(0)):
+        harness.charm.on.install.emit()
+
+    assert harness.charm.unit.status.name == "active"
+    assert harness.charm.stored.config_hash == 0
+
+
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_install_manifests_leader(ceph_context, harness, lk_client):
+    """Test that install_manifests operates on leaders."""
+    harness.begin()
+    ceph_context.return_value = {
+        "auth": "cephx",
+        "fsid": "12345",
+        "kubernetes_key": "123",
+        "mon_hosts": ["10.0.0.1"],
+        "user": "ceph-csi",
+        "provisioner_replicas": 3,
+        "enable_host_network": "false",
+        "fsname": None,
+    }
+    harness.charm.stored.config_hash = 0
+    with reconcile_this(harness, lambda _: harness.charm.install_manifests(1)):
+        harness.set_leader(True)
+
+    assert harness.charm.unit.status.name == "active"
+    assert harness.charm.stored.config_hash == 1
+
+    lk_client.apply.side_effect = ManifestClientError("API Server Unavailable")
+    with reconcile_this(harness, lambda _: harness.charm.install_manifests(2)):
+        harness.set_leader(True)
+
+    assert harness.charm.stored.config_hash == 1
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "API Server Unavailable"
 
 
 @mock.patch("interface_ceph_client.ceph_client.CephClientRequires.request_ceph_permissions")
@@ -207,8 +376,10 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
     harness.begin()
 
     # add ceph-client relation
-    relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    harness.add_relation_unit(relation_id, "ceph-mon/0")
+    reconciled = mock.MagicMock()
+    with reconcile_this(harness, lambda _: reconciled):
+        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        harness.add_relation_unit(relation_id, "ceph-mon/0")
 
     assert create_replicated_pool.call_count == 2
     create_replicated_pool.assert_any_call(name="ext4-pool")
@@ -226,177 +397,22 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
             "profile rbd, allow rw tag cephfs metadata=*",
         ],
     )
+    reconciled.assert_called_once
 
 
-@pytest.mark.parametrize("leadership", (False, True))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli")
-@mock.patch("charm.CephCsiCharm._check_namespace", return_value=True)
-@mock.patch("charm.CephCsiCharm._check_kube_config", return_value=True)
-def test_ceph_client_relation_changed_leader(
-    check_kube_config,
-    check_namespace,
-    configure_ceph_cli,
-    leadership,
-    harness,
-    lk_client,
-):
-    """Test ceph-client-relation-changed hook on a leader unit"""
+@mock.patch("charm.CephCsiCharm._purge_manifest")
+def test_cleanup(_purge_manifest, harness, caplog):
+    harness.set_leader(True)
     harness.begin()
-    rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    harness.set_leader(leadership)
-    data = {
-        "auth": "cephx",
-        "key": "12345",
-        "mon_hosts": '["10.0.0.1", "10.0.0.2"]',
-        "ceph-public-address": "10.0.0.1",
-    }
+    harness.charm.on.stop.emit()
 
-    harness.add_relation_unit(rel_id, "ceph-mon/0")
-    configure_ceph_cli.assert_not_called()
-    check_namespace.assert_not_called()
-    check_kube_config.assert_not_called()
-    assert harness.charm.stored.ceph_data == {}
-    assert not harness.charm.stored.deployed
     assert harness.charm.stored.config_hash == 0
-    lk_client.apply.assert_not_called()
-
-    harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "waiting"
-    assert harness.charm.unit.status.message == "Ceph relation is missing data."
-
-    harness.update_relation_data(rel_id, "ceph-mon/0", data)
-    configure_ceph_cli.assert_called_once_with()
-    check_namespace.assert_called_once()
-    check_kube_config.assert_called_once()
-    assert harness.charm.stored.ceph_data == {
-        "auth": "cephx",
-        "key": "12345",
-        "mon_hosts": ["10.0.0.1"],
-    }
-    assert harness.charm.stored.deployed
-    assert harness.charm.stored.config_hash != 0
-    if leadership:
-        lk_client.apply.assert_called()
-    else:
-        lk_client.apply.assert_not_called()
-
-    # Fake a installed resource waiting to start
-    def mock_condition(*args, **kwargs):
-        obj = mock.MagicMock(spec=args[0])
-        obj.kind = args[0].__name__
-        obj.metadata.name = args[1]
-        obj.metadata.namespace = kwargs["namespace"]
-        if hasattr(obj, "status"):
-            obj.status.conditions = [AnyCondition(status="False", type="Ready")]
-        return obj
-
-    lk_client.get.side_effect = mock_condition
-    harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "waiting"
-    assert harness.charm.unit.status.message == ", ".join(
-        [
-            "rbd: DaemonSet/default/csi-rbdplugin is not Ready",
-            "rbd: Deployment/default/csi-rbdplugin-provisioner is not Ready",
-            "rbd: Service/default/csi-metrics-rbdplugin is not Ready",
-            "rbd: Service/default/csi-rbdplugin-provisioner is not Ready",
-        ]
-    )
-
-    lk_client.get.side_effect = None
-    harness.update_config({"namespace": "different"})
-    harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "blocked"
-    assert (
-        harness.charm.unit.status.message
-        == "Namespace 'default' cannot be configured to 'different'"
-    )
-
-
-@pytest.mark.parametrize("leadership", (False, True))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-@mock.patch("charm.CephCsiCharm._check_namespace", mock.MagicMock(return_value=True))
-@mock.patch("charm.CephCsiCharm._check_kube_config", mock.MagicMock(return_value=True))
-def test_ceph_client_relation_departed(harness, caplog, leadership):
-    """Test that warning is logged about ceph-pools not being cleaned up after rel. removal."""
-
-    # Operator testing harness does not provide a helper to "remove relation" so for now we'll
-    # invoke method manually
-    harness.begin()
-    rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    harness.set_leader(leadership)
-    data = {
-        "auth": "cephx",
-        "key": "12345",
-        "mon_hosts": '["10.0.0.1", "10.0.0.2"]',
-        "ceph-public-address": "10.0.0.1",
-    }
-    harness.add_relation_unit(rel_id, "ceph-mon/0")
-    harness.update_relation_data(rel_id, "ceph-mon/0", data)
-    caplog.clear()
-
-    pools = ", ".join(CephCsiCharm.REQUIRED_CEPH_POOLS)
-    caplog.set_level(logging.INFO)
-    harness.charm._on_ceph_client_removed(mock.MagicMock())
-    if leadership:
-        expected_msg = f"Ceph pools {pools} won't be removed."
-    else:
-        expected_msg = "Execution of function '_purge_all_manifests' skipped"
-    assert expected_msg in caplog.text
-
-
-@mock.patch("charm.CephCsiCharm._purge_all_manifests")
-def test_cleanup(purge_all_manifests, harness, caplog):
-    harness.begin()
-    harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
-    harness.charm.stored.deployed = True
-    caplog.set_level(logging.INFO)
-    event = mock.MagicMock()
-    harness.charm._cleanup(event)
-    purge_all_manifests.assert_called_once_with(event)
-
-
-@mock.patch("charm.ceph_client.CephClientRequires.get_relation_data")
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-def test_safe_load_ceph_client_data(get_relation_data, harness):
-    """Test that `safe_load_ceph_admin_data` method loads data properly.
-
-    Data are expected to be stored in the StoredState only if all the required keys are present
-    in the relation data.
-    """
-    auth = "cephx"
-    key = "bar"
-    ceph_mons = ["10.0.0.1", "10.0.0.2"]
-    relation_data = {"auth": auth, "key": key, "mon_hosts": ceph_mons}
-    get_relation_data.return_value = relation_data
-
-    harness.begin_with_initial_hooks()
-
-    # All data should be loaded
-    assert harness.charm.safe_load_ceph_client_data()
-
-    assert harness.charm.stored.ceph_data["auth"] == auth
-    assert harness.charm.stored.ceph_data["key"] == key
-    assert harness.charm.stored.ceph_data["mon_hosts"] == ceph_mons
-
-    # reset
-    harness.charm.stored.ceph_data = {}
-
-    # don't load anything if relation data is missing
-    get_relation_data.return_value = {"auth": auth, "key": key}
-
-    assert not harness.charm.safe_load_ceph_client_data()
-    assert "auth" not in harness.charm.stored.ceph_data
-    assert "key" not in harness.charm.stored.ceph_data
-    assert "mon_hosts" not in harness.charm.stored.ceph_data
+    _purge_manifest.assert_called()
 
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 def test_action_list_versions(harness):
-    harness.begin_with_initial_hooks()
+    harness.begin()
 
     mock_event = mock.MagicMock()
     assert harness.charm._list_versions(mock_event) is None
@@ -412,7 +428,7 @@ def test_action_list_versions(harness):
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 def test_action_manifest_resources(harness):
-    harness.begin_with_initial_hooks()
+    harness.begin()
 
     mock_event = mock.MagicMock()
     assert harness.charm._list_resources(mock_event) is None
@@ -452,7 +468,7 @@ def test_action_manifest_resources(harness):
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
 def test_action_sync_resources_install_failure(harness, lk_client):
-    harness.begin_with_initial_hooks()
+    harness.begin()
 
     mock_event = mock.MagicMock()
     expected_results = {"result": "Failed to sync missing resources: API Server Unavailable"}
@@ -495,99 +511,98 @@ def test_action_delete_storage_class(harness, lk_client):
     )
 
 
-def test_signal_unit_waiting_status(harness):
-    mock_event = mock.MagicMock()
-    harness.begin_with_initial_hooks()
-    harness.charm._ops_wait_for(mock_event, "time to wait")
-    assert harness.charm.unit.status.name == "waiting"
-    assert harness.charm.unit.status.message == "time to wait"
-    mock_event.defer.assert_called_once()
-
-
-def test_signal_unit_blocked_status(harness, caplog):
-    harness.begin_with_initial_hooks()
-    caplog.set_level(logging.ERROR)
-    harness.charm._ops_blocked_by("time to block", exc_info=True)
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "time to block"
-    caplog.clear()
-
-
 @mock.patch("charm.CephCsiCharm.ceph_cli", mock.MagicMock(side_effect=SubprocessError))
 def test_failed_cli_fsid(harness):
-    harness.begin_with_initial_hooks()
+    harness.begin()
     assert harness.charm.get_ceph_fsid() == ""
 
 
 @pytest.mark.parametrize("failure", [SubprocessError, lambda *_: "invalid"])
 def test_failed_cli_fsname(harness, failure):
-    harness.begin_with_initial_hooks()
+    harness.begin()
     with mock.patch("charm.CephCsiCharm.ceph_cli", side_effect=failure):
         assert harness.charm.get_ceph_fsname() is None
 
 
 def test_cli_fsname(request, harness):
-    harness.begin_with_initial_hooks()
+    harness.begin()
     pools = json.dumps([{"data_pools": ["ceph-fs_data"], "name": request.node.name}])
     with mock.patch("charm.CephCsiCharm.ceph_cli", return_value=pools):
         assert harness.charm.get_ceph_fsname() == request.node.name
 
 
-def test_check_kube_config(harness):
-    mock_event = mock.MagicMock()
-    harness.begin_with_initial_hooks()
-    with mock.patch("charm.KubeConfig.from_env", side_effect=ConfigError):
-        assert not harness.charm._check_kube_config(mock_event)
-    assert harness.charm.unit.status.name == "waiting"
-    assert harness.charm.unit.status.message == "Waiting for kubeconfig"
+def test_kubelet_dir(harness):
+    harness.begin()
+    data = {"kubelet-root-dir": "/var/snap/k8s/common/var/lib/kubelet"}
+    with reconcile_this(harness, lambda _: None):
+        rel_id = harness.add_relation("kubernetes-info", "k8s")
+        harness.add_relation_unit(rel_id, "k8s/0")
+        harness.update_relation_data(rel_id, "k8s", data)
 
-    with mock.patch("charm.KubeConfig.from_env"):
-        assert harness.charm._check_kube_config(mock_event)
-    assert harness.charm.unit.status.name == "maintenance"
-    assert harness.charm.unit.status.message == "Evaluating kubernetes authentication"
-
-
-def test_check_namespace(harness, lk_charm_client):
-    mock_event = mock.MagicMock()
-    harness.begin_with_initial_hooks()
-
-    api_error = ApiError(response=mock.MagicMock())
-
-    # should be blocked if the ns doesn't exist
-    api_error.status.message = "not found"
-    lk_charm_client.get.side_effect = api_error
-    assert not harness.charm._check_namespace(mock_event, "ns")
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Missing namespace 'ns'"
-
-    # should be in waiting if the k8s api isn't ready
-    api_error.status.message = "something else happened"
-    lk_charm_client.get.side_effect = api_error
-    assert not harness.charm._check_namespace(mock_event, "ns")
-    assert harness.charm.unit.status.name == "waiting"
-
-    # should be true if no api errors
-    lk_charm_client.get.side_effect = None
-    assert harness.charm._check_namespace(mock_event, "ns")
+    assert harness.charm.kubelet_dir == "/var/snap/k8s/common/var/lib/kubelet"
 
 
 def test_check_cephfs(harness):
-    harness.begin_with_initial_hooks()
+    harness.begin()
 
     # no enable, no fsname -> no problem
-    harness.update_config({"cephfs-enable": False})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": None}
-        assert harness.charm._check_cephfs()
+        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
+            harness.set_leader(True)
+            harness.update_config({"cephfs-enable": False})
+    assert harness.charm.unit.status.name == "active"
 
     # enable, fsname -> no problem
-    harness.update_config({"cephfs-enable": True})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": "abcd"}
-        assert harness.charm._check_cephfs()
+        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
+            harness.update_config({"cephfs-enable": True})
+    assert harness.charm.unit.status.name == "active"
 
     # enable, no fsname -> problem
-    harness.update_config({"cephfs-enable": True})
     with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
         mock_ctx.return_value = {"fsname": None}
-        assert not harness.charm._check_cephfs()
+        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
+            harness.update_config({"cephfs-enable": True})
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "CephFS is not usable; set 'cephfs-enable=False'"
+
+
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_update_status_waiting(ceph_context, harness):
+    harness.set_leader(True)
+    harness.begin()
+    harness.charm.reconciler.stored.reconciled = True
+    harness.charm.stored.namespace = "non-default"
+    ceph_context.return_value = {
+        "auth": "cephx",
+        "fsid": "12345",
+        "kubernetes_key": "123",
+        "mon_hosts": ["10.0.0.1"],
+        "user": "ceph-csi",
+        "provisioner_replicas": 3,
+        "enable_host_network": "false",
+        "fsname": None,
+    }
+    with mock.patch.object(harness.charm, "collector") as mock_collector:
+        mock_collector.unready = ["not-ready"]
+        harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "not-ready"
+
+    with mock.patch.object(harness.charm, "collector") as mock_collector:
+        mock_collector.unready = []
+        harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Namespace cannot be changed after deployment"
+
+    harness.charm.stored.namespace = "default"
+    with mock.patch.object(harness.charm, "collector") as mock_collector:
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "active"
+    assert harness.charm.app._backend._workload_version == "short-version"
+    assert harness.charm.app.status.message == "long-version"

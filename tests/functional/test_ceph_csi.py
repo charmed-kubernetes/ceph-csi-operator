@@ -84,7 +84,7 @@ async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTes
     await ops_test.model.wait_for_idle(wait_for_active=True, timeout=10 * 60, check_freq=5)
     for unit in ops_test.model.applications["ceph-csi"].units:
         assert unit.workload_status == "active"
-        assert unit.workload_status_message == "Unit is ready"
+        assert unit.workload_status_message == "Ready"
 
 
 async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
