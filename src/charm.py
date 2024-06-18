@@ -378,7 +378,9 @@ class CephCsiCharm(ops.CharmBase):
     def reconcile(self, event: ops.EventBase) -> None:
         """Reconcile the charm state."""
         if self._destroying(event):
-            if self.unit.is_leader():
+            leader = self.unit.is_leader()
+            logger.info("purge manifests if leader(%s) event(%s)", leader, event)
+            if leader:
                 self._purge_all_manifests()
             return
 
@@ -425,12 +427,11 @@ class CephCsiCharm(ops.CharmBase):
         """Purge resources created by this charm."""
         self.unit.status = ops.MaintenanceStatus("Removing Kubernetes resources")
         for manifest in self.collector.manifests.values():
-            if not self._purge_manifest(manifest):
-                return
+            self._purge_manifest(manifest)
         ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
         logger.warning(
-            "Ceph pools %s won't be removed. If you want to clean up pools manually, use juju "
-            "action 'delete-pool' on 'ceph-mon' units",
+            "Ceph pools %s won't be removed. If you want to clean up pools manually,"
+            "use `juju run ceph-mon/leader delete-pool`",
             ceph_pools,
         )
         self.stored.config_hash = 0
