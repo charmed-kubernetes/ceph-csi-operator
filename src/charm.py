@@ -124,6 +124,7 @@ class CephCsiCharm(ops.CharmBase):
         unready = self.collector.unready
         if unready:
             status.add(ops.WaitingStatus(", ".join(unready)))
+            raise status.ReconcilerError("Waiting for deployment")
         elif self.stored.namespace != self._configured_ns:
             status.add(ops.BlockedStatus("Namespace cannot be changed after deployment"))
         else:
