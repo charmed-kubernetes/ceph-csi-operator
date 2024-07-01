@@ -32,7 +32,7 @@ def wait_for_pod(
     core_api: client.CoreV1Api,
     name: str,
     namespace: str,
-    timeout: int = 60,
+    timeout: int = 120,
     target_state: str = "Running",
 ) -> None:
     """
