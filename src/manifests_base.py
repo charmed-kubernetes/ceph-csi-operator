@@ -1,5 +1,6 @@
 import logging
 import pickle
+from abc import ABCMeta, abstractmethod
 from hashlib import md5
 from typing import Any, Dict, Optional
 
@@ -36,6 +37,14 @@ class AdjustNamespace(Patch):
 
 class StorageClassAddition(Addition):
     """Base class for storage class additions."""
+
+    __metaclass__ = ABCMeta
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Name of the storage class."""
+        raise NotImplementedError
 
     def update_parameters(self, parameters: Dict[str, str]) -> None:
         """Adjust parameters for storage class."""
