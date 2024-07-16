@@ -47,15 +47,17 @@ def test_ceph_storage_class_modeled(caplog, fs_type):
 
     caplog.clear()
     alt_ns = "diff-ns"
+    sc_params = f"ceph-{fs_type}-storage-class-parameters"
     manifest.config = {
         "fsid": "abcd",
         "namespace": alt_ns,
         "default-storage": f"ceph-{fs_type}",
+        sc_params: "thickProvision- invalid-key extra-parameter=value",
     }
 
     expected = StorageClass(
         metadata=ObjectMeta(
-            name=csc.fs_name,
+            name=csc.name,
             annotations={"storageclass.kubernetes.io/is-default-class": "true"},
         ),
         provisioner=CephStorageClass.PROVISIONER,
@@ -68,16 +70,17 @@ def test_ceph_storage_class_modeled(caplog, fs_type):
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
+            "extra-parameter": "value",
             "imageFeatures": "layering",
             "pool": f"{csc.fs_type}-pool",
-            "thickProvision": "false",
         },
         allowVolumeExpansion=True,
         mountOptions=["discard"],
         reclaimPolicy="Delete",
     )
     assert csc() == expected
-    assert f"Modelling storage class {csc.fs_name}" in caplog.text
+    assert f"Modelling storage class {csc.name}" in caplog.text
+    assert f"Invalid parameter: invalid-key in {sc_params}" in caplog.text
 
 
 def test_manifest_evaluation(caplog):
