@@ -35,6 +35,30 @@ options:
       determined by probing for ceph-fuse and mount.ceph
     type: string
 
+  cephfs-storage-class-parameters:
+    default: ""
+    description: |
+      Parameters to be passed to the cephfs storage class.
+      Declare additional parameters in key=value format, separated by spaces.
+      Declare removed parameters in the key- format, separated by spaces.
+    type: string
+
+  ceph-xfs-storage-class-parameters:
+    default: ""
+    description: |
+      Parameters to be passed to the ceph-xfs storage class.
+      Declare additional parameters in key=value format, separated by spaces.
+      Declare removed parameters in the key- format, separated by spaces.
+    type: string
+
+  ceph-ext4-storage-class-parameters:
+    default: ""
+    description: |
+      Parameters to be passed to the ceph-ext4 storage class.
+      Declare additional parameters in key=value format, separated by spaces.
+      Declare removed parameters in the key- format, separated by spaces.
+    type: string
+
   namespace:
     type: string
     default: ""

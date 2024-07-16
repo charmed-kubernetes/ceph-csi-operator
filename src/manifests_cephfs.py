@@ -12,7 +12,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
 from ops.manifests.manipulations import Subtraction
 
-from manifests_base import AdjustNamespace, SafeManifest
+from manifests_base import AdjustNamespace, SafeManifest, StorageClassAddition
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
@@ -51,13 +51,17 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(Addition):
+class CephStorageClass(StorageClassAddition):
     """Create ceph storage classes."""
 
     STORAGE_NAME = "cephfs"
     REQUIRED_CONFIG = {"fsid", "fsname"}
     PROVISIONER = "cephfs.csi.ceph.com"
     POOL = "ceph-fs_data"
+
+    @property
+    def name(self) -> str:
+        return self.STORAGE_NAME
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
@@ -76,7 +80,7 @@ class CephStorageClass(Addition):
             return None
 
         ns = self.manifests.config["namespace"]
-        metadata: Dict[str, Any] = dict(name=self.STORAGE_NAME)
+        metadata: Dict[str, Any] = dict(name=self.name)
         if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
@@ -95,6 +99,8 @@ class CephStorageClass(Addition):
         mounter = self.manifests.config.get("cephfs-mounter")
         if mounter in ["kernel", "fuse"]:
             parameters["mounter"] = mounter
+
+        self.update_parameters(parameters)
 
         return StorageClass.from_dict(
             dict(
