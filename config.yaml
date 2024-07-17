@@ -38,25 +38,40 @@ options:
   cephfs-storage-class-parameters:
     default: ""
     description: |
-      Parameters to be passed to the cephfs storage class.
-      Declare additional parameters in key=value format, separated by spaces.
+      Parameters to be used when creating the cephfs storage class.
+      Changes are only applied to the storage class if it does not exist.
+
+      Declare additional/replacement parameters in key=value format, separated by spaces.
       Declare removed parameters in the key- format, separated by spaces.
+
+      Optional parameters can be found in the ceph-csi documentation:
+      https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
     type: string
 
   ceph-xfs-storage-class-parameters:
-    default: ""
+    default: "imageFeatures=layering"
     description: |
-      Parameters to be passed to the ceph-xfs storage class.
-      Declare additional parameters in key=value format, separated by spaces.
+      Parameters to be used when creating the ceph-xfs storage class.
+      Changes are only applied to the storage class if it does not exist.
+
+      Declare additional/replacement parameters in key=value format, separated by spaces.
       Declare removed parameters in the key- format, separated by spaces.
+
+      Optional parameters can be found in the ceph-csi documentation:
+      https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
     type: string
 
   ceph-ext4-storage-class-parameters:
-    default: ""
+    default: "imageFeatures=layering"
     description: |
-      Parameters to be passed to the ceph-ext4 storage class.
-      Declare additional parameters in key=value format, separated by spaces.
+      Parameters to be used when creating the the ceph-ext4 storage class.
+      Changes are only applied to the storage class if it does not exist.
+
+      Declare additional/replacement parameters in key=value format, separated by spaces.
       Declare removed parameters in the key- format, separated by spaces.
+
+      Optional parameters can be found in the ceph-csi documentation:
+      https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
     type: string
 
   namespace:

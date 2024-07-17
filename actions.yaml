@@ -43,3 +43,16 @@ sync-resources:
         Space separated list of kubernetes resource types
         to use a filter during the sync. This helps limit
         which missing resources are applied.
+delete-storage-class:
+  description: |
+    Delete storage class which may be in conflict with the underlying cluster.
+  params:
+    name:
+      type: string
+      description: Name of a specific storage class to delete.
+      enum:
+        - cephfs
+        - ceph-xfs
+        - cephfs-ext4
+  required:
+  - name
