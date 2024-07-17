@@ -80,9 +80,7 @@ class CephStorageClass(StorageClassAddition):
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
-            "imageFeatures": "layering",
             "pool": f"{self.fs_type}-pool",
-            "thickProvision": "false",
         }
 
         self.update_parameters(parameters)

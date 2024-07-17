@@ -9,7 +9,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from manifests_rbd import CephStorageClass, RBDManifests, StorageSecret
 
 
-def test_storage_secret_modeled(caplog):
+def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     ss = StorageSecret(manifest)
@@ -36,7 +36,7 @@ def test_storage_secret_modeled(caplog):
 
 
 @pytest.mark.parametrize("fs_type", ["xfs", "ext4"])
-def test_ceph_storage_class_modeled(caplog, fs_type):
+def test_ceph_storage_class_modelled(caplog, fs_type):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     manifest.config = {}
@@ -52,7 +52,11 @@ def test_ceph_storage_class_modeled(caplog, fs_type):
         "fsid": "abcd",
         "namespace": alt_ns,
         "default-storage": f"ceph-{fs_type}",
-        sc_params: "thickProvision- invalid-key extra-parameter=value",
+        sc_params: (
+            "missing-key- "  # removes the missing-key key
+            "invalid-key "  # skips the invalid-key key
+            "extra-parameter=value"  # adds the extra-parameter key
+        ),
     }
 
     expected = StorageClass(
@@ -70,9 +74,8 @@ def test_ceph_storage_class_modeled(caplog, fs_type):
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
-            "extra-parameter": "value",
-            "imageFeatures": "layering",
             "pool": f"{csc.fs_type}-pool",
+            "extra-parameter": "value",
         },
         allowVolumeExpansion=True,
         mountOptions=["discard"],
