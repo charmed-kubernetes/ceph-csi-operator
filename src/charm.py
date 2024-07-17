@@ -16,6 +16,7 @@ from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
 from lightkube.core.exceptions import ApiError, ConfigError
 from lightkube.resources.core_v1 import Namespace
+from lightkube.resources.storage_v1 import StorageClass
 from ops.charm import ActionEvent, CharmBase, EventBase, UpdateStatusEvent
 from ops.framework import StoredState
 from ops.main import main
@@ -70,6 +71,7 @@ class CephCsiCharm(CharmBase):
         self.framework.observe(self.on.list_resources_action, self._list_resources)
         self.framework.observe(self.on.scrub_resources_action, self._scrub_resources)
         self.framework.observe(self.on.sync_resources_action, self._sync_resources)
+        self.framework.observe(self.on.delete_storage_class_action, self._delete_storage_class)
         self.framework.observe(self.on.update_status, self._update_status)
 
         self.framework.observe(self.on.install, self._on_install_or_upgrade)
@@ -133,6 +135,24 @@ class CephCsiCharm(CharmBase):
             msg += " -> ".join(map(str, e.args))
             event.set_results({"result": msg})
         else:
+            self.stored.deployed = True
+
+    def _delete_storage_class(self, event: ActionEvent) -> None:
+        storage_class: Optional[str] = event.params.get("name")
+        if storage_class not in ["cephfs", "ceph-xfs", "ceph-ext4"]:
+            msg = "Invalid storage class name. Must be one of: cephfs, ceph-xfs, ceph-ext4"
+            event.fail(msg)
+            return
+
+        manifest, *_ = self.collector.manifests.values()
+        try:
+            manifest.client.delete(StorageClass, name=storage_class)
+        except ManifestClientError as e:
+            msg = "Failed to delete storage class: "
+            msg += " -> ".join(map(str, e.args))
+            event.fail(msg)
+        else:
+            event.set_results({"result": f"Successfully deleted StorageClass/{storage_class}"})
             self.stored.deployed = True
 
     def _update_status(self, event: EventBase) -> None:

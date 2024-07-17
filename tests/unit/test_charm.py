@@ -12,6 +12,7 @@ from subprocess import SubprocessError
 import charms.operator_libs_linux.v0.apt as apt
 import pytest
 from lightkube.core.exceptions import ApiError, ConfigError
+from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ManifestClientError
 from ops.manifests.manipulations import AnyCondition
 from ops.testing import Harness
@@ -449,6 +450,40 @@ def test_action_sync_resources_install_failure(harness, lk_client):
     lk_client.apply.side_effect = ManifestClientError("API Server Unavailable")
     assert harness.charm._sync_resources(mock_event) is None
     mock_event.set_results.assert_called_with(expected_results)
+
+
+def test_action_delete_storage_class_unknown(harness, lk_client):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    expected_results = "Invalid storage class name. Must be one of: cephfs, ceph-xfs, ceph-ext4"
+    lk_client.delete.side_effect = ManifestClientError("API Server Unavailable")
+    assert harness.charm._delete_storage_class(mock_event) is None
+    mock_event.fail.assert_called_with(expected_results)
+    lk_client.delete.assert_not_called()
+
+
+def test_action_delete_storage_class_api_error(harness, lk_client):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    mock_event.params = {"name": "cephfs"}
+    lk_client.delete.side_effect = ManifestClientError("API Server Unavailable")
+    assert harness.charm._delete_storage_class(mock_event) is None
+    lk_client.delete.assert_called_once_with(StorageClass, name="cephfs")
+    mock_event.fail.assert_called_with("Failed to delete storage class: API Server Unavailable")
+
+
+def test_action_delete_storage_class(harness, lk_client):
+    harness.begin_with_initial_hooks()
+
+    mock_event = mock.MagicMock()
+    mock_event.params = {"name": "cephfs"}
+    assert harness.charm._delete_storage_class(mock_event) is None
+    lk_client.delete.assert_called_once_with(StorageClass, name="cephfs")
+    mock_event.set_results.assert_called_with(
+        {"result": "Successfully deleted StorageClass/cephfs"}
+    )
 
 
 def test_signal_unit_waiting_status(harness):
