@@ -7,7 +7,7 @@ import configparser
 import json
 import logging
 import subprocess
-from functools import cached_property, wraps
+from functools import cached_property, lru_cache, wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, cast
 
@@ -29,6 +29,18 @@ from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
 logger = logging.getLogger(__name__)
+
+
+def ceph_config_dir() -> Path:
+    return Path.cwd() / "ceph-conf"
+
+
+def ceph_config_file() -> Path:
+    return ceph_config_dir() / "ceph.conf"
+
+
+def ceph_keyring_file(app_name: str) -> Path:
+    return ceph_config_dir() / f"ceph.client.{app_name}.keyring"
 
 
 def needs_leader(func: Callable) -> Callable:
@@ -216,7 +228,7 @@ class CephCsiCharm(CharmBase):
             "auth cluster required": self.auth or "",
             "auth service required": self.auth or "",
             "auth client required": self.auth or "",
-            "keyring": "/etc/ceph/$cluster.$name.keyring",
+            "keyring": f"{ceph_config_dir()}/$cluster.$name.keyring",
             "mon host": " ".join(self.mon_hosts),
             "log to syslog": "true",
             "err to syslog": "true",
@@ -227,27 +239,28 @@ class CephCsiCharm(CharmBase):
         }
         config["client"] = {"log file": "/var/log/ceph.log"}
 
-        with Path("/etc/ceph/ceph.conf").open("w") as fp:
+        with ceph_config_file().open("w") as fp:
             config.write(fp)
 
     def write_ceph_cli_keyring(self) -> None:
         """Write Ceph CLI keyring file"""
         config = configparser.ConfigParser()
         config[f"client.{self.app.name}"] = {"key": self.key or ""}
-        with Path(f"/etc/ceph/ceph.client.{self.app.name}.keyring").open("w") as fp:
+        with ceph_keyring_file(self.app.name).open("w") as fp:
             config.write(fp)
 
     def configure_ceph_cli(self) -> None:
         """Configure Ceph CLI"""
-        Path("/etc/ceph").mkdir(parents=True, exist_ok=True)
+        ceph_config_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
         self.write_ceph_cli_config()
         self.write_ceph_cli_keyring()
 
     def ceph_cli(self, *args: str, timeout: int = 60) -> str:
         """Run Ceph CLI command"""
-        cmd = ["ceph", "--user", self.app.name] + list(args)
+        cmd = ["/usr/bin/ceph", "--conf", str(ceph_config_file()), "--user", self.app.name, *args]
         return subprocess.check_output(cmd, timeout=timeout).decode("UTF-8")
 
+    @lru_cache(maxsize=None)
     def get_ceph_fsid(self) -> str:
         """Get the Ceph FSID (cluster ID)"""
         try:

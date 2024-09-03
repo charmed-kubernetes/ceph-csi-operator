@@ -30,73 +30,77 @@ def harness():
 
 
 @pytest.fixture(autouse=True)
+def ceph_conf_directory(tmp_path):
+    with mock.patch("charm.ceph_config_dir") as mock_path:
+        mock_path.return_value = tmp_path / "ceph-conf"
+        yield mock_path
+
+
+@pytest.fixture(autouse=True)
 def mock_apt():
     with mock.patch("charms.operator_libs_linux.v0.apt.add_package", autospec=True) as mock_apt:
         yield mock_apt
 
 
-def test_write_ceph_cli_config(harness):
+@mock.patch("charm.ceph_config_file")
+def test_write_ceph_cli_config(ceph_config_file, harness, ceph_conf_directory):
     """Test writing of Ceph CLI config"""
     harness.begin()
     harness.charm.stored.ceph_data["auth"] = "cephx"
     harness.charm.stored.ceph_data["mon_hosts"] = ["10.0.0.1", "10.0.0.2"]
-    with mock.patch("charm.Path") as mock_path:
-        harness.charm.write_ceph_cli_config()
-        mock_path.assert_called_once_with("/etc/ceph/ceph.conf")
-        path = mock_path.return_value
-        path.open.assert_called_once_with("w")
-        with path.open() as fp:
-            lines = [
-                "[global]",
-                "auth cluster required = cephx",
-                "auth service required = cephx",
-                "auth client required = cephx",
-                "keyring = /etc/ceph/$cluster.$name.keyring",
-                "mon host = 10.0.0.1 10.0.0.2",
-                "log to syslog = true",
-                "err to syslog = true",
-                "clog to syslog = true",
-                "mon cluster log to syslog = true",
-                "debug mon = 1/5",
-                "debug osd = 1/5",
-                "",
-                "[client]",
-                "log file = /var/log/ceph.log",
-                "",
-            ]
-            fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
+    harness.charm.write_ceph_cli_config()
+    path = ceph_config_file.return_value
+    path.open.assert_called_once_with("w")
+    with path.open() as fp:
+        lines = [
+            "[global]",
+            "auth cluster required = cephx",
+            "auth service required = cephx",
+            "auth client required = cephx",
+            f"keyring = {ceph_conf_directory.return_value}/$cluster.$name.keyring",
+            "mon host = 10.0.0.1 10.0.0.2",
+            "log to syslog = true",
+            "err to syslog = true",
+            "clog to syslog = true",
+            "mon cluster log to syslog = true",
+            "debug mon = 1/5",
+            "debug osd = 1/5",
+            "",
+            "[client]",
+            "log file = /var/log/ceph.log",
+            "",
+        ]
+        fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
 
 
-def test_write_ceph_cli_keyring(harness):
+@mock.patch("charm.ceph_keyring_file")
+def test_write_ceph_cli_keyring(ceph_keyring_file, harness):
     """Test writing of Ceph CLI keyring file"""
     harness.begin()
     harness.charm.stored.ceph_data["key"] = "12345"
-    with mock.patch("charm.Path") as mock_path:
-        harness.charm.write_ceph_cli_keyring()
-        mock_path.assert_called_once_with("/etc/ceph/ceph.client.ceph-csi.keyring")
-        path = mock_path.return_value
-        path.open.assert_called_once_with("w")
-        with path.open() as fp:
-            lines = ["[client.ceph-csi]", "key = 12345", ""]
-            fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
+    harness.charm.write_ceph_cli_keyring()
+    ceph_keyring_file.return_value.open.assert_called_once_with("w")
+    with ceph_keyring_file.return_value.open() as fp:
+        lines = ["[client.ceph-csi]", "key = 12345", ""]
+        fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
 
 
 @mock.patch("charm.CephCsiCharm.write_ceph_cli_config")
 @mock.patch("charm.CephCsiCharm.write_ceph_cli_keyring")
-def test_configure_ceph_cli(keyring, config, harness):
+@mock.patch("charm.ceph_config_dir")
+def test_configure_ceph_cli(ceph_config_dir, keyring, config, harness):
     """Test configuration of Ceph CLI"""
     harness.begin()
-    with mock.patch("charm.Path") as mock_path:
-        harness.charm.configure_ceph_cli()
-        mock_path.assert_called_once_with("/etc/ceph")
-        path = mock_path.return_value
-        path.mkdir.assert_called_once_with(parents=True, exist_ok=True)
-        config.assert_called_once()
-        keyring.assert_called_once()
+    harness.charm.configure_ceph_cli()
+    ceph_config_dir.return_value.mkdir.assert_called_once_with(
+        mode=0o700, parents=True, exist_ok=True
+    )
+    config.assert_called_once()
+    keyring.assert_called_once()
 
 
 @mock.patch("subprocess.check_output")
-def test_ceph_context_getter(check_output, harness):
+def test_ceph_context_getter(check_output, harness, ceph_conf_directory):
     """Test that ceph_context property returns properly formatted data."""
     fsid = "12345"
     key = "secret_key"
@@ -122,9 +126,13 @@ def test_ceph_context_getter(check_output, harness):
     }
 
     assert harness.charm.ceph_context == expected_context
-    check_output.assert_any_call(["ceph", "--user", "ceph-csi", "fsid"], timeout=60)
+    conf_file = str(ceph_conf_directory() / "ceph.conf")
     check_output.assert_any_call(
-        ["ceph", "--user", "ceph-csi", "fs", "ls", "-f", "json"], timeout=60
+        ["/usr/bin/ceph", "--conf", conf_file, "--user", "ceph-csi", "fsid"], timeout=60
+    )
+    check_output.assert_any_call(
+        ["/usr/bin/ceph", "--conf", conf_file, "--user", "ceph-csi", "fs", "ls", "-f", "json"],
+        timeout=60,
     )
 
 
