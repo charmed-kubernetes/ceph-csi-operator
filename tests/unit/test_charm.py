@@ -127,12 +127,12 @@ def test_ceph_context_getter(check_output, harness, ceph_conf_directory):
     }
 
     assert harness.charm.ceph_context == expected_context
-    conf_file = str(ceph_conf_directory() / "ceph.conf")
+    conf = (ceph_conf_directory() / "ceph.conf").absolute().as_posix()
     check_output.assert_any_call(
-        ["/usr/bin/ceph", "--conf", conf_file, "--user", "ceph-csi", "fsid"], timeout=60
+        ["/usr/bin/ceph", "--conf", conf, "--user", "ceph-csi", "fsid"], timeout=60
     )
     check_output.assert_any_call(
-        ["/usr/bin/ceph", "--conf", conf_file, "--user", "ceph-csi", "fs", "ls", "-f", "json"],
+        ["/usr/bin/ceph", "--conf", conf, "--user", "ceph-csi", "fs", "ls", "-f", "json"],
         timeout=60,
     )
 

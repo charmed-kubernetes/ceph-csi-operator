@@ -258,7 +258,8 @@ class CephCsiCharm(CharmBase):
 
     def ceph_cli(self, *args: str, timeout: int = 60) -> str:
         """Run Ceph CLI command"""
-        cmd = ["/usr/bin/ceph", "--conf", str(ceph_config_file()), "--user", self.app.name, *args]
+        conf = ceph_config_file().absolute().as_posix()
+        cmd = ["/usr/bin/ceph", "--conf", conf, "--user", self.app.name, *args]
         return subprocess.check_output(cmd, timeout=timeout).decode("UTF-8")
 
     @lru_cache(maxsize=None)
