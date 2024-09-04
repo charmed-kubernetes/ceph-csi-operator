@@ -21,6 +21,16 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+METRICS_PORT_CONFIG = "metrics-port"
+
+
+def _valid_metrics_port(value: int) -> bool:
+    """Validate the metrics port."""
+    if value == -1:
+        return True
+    return 1024 <= value <= 65535
+
+
 class CephConfig(Addition):
     """Create configmap for the ceph-conf."""
 
@@ -128,4 +138,19 @@ class ConfigManifests(SafeManifest):
             value = self.config.get(prop)
             if not value:
                 return f"Config manifests require the definition of '{prop}'"
+
+        # Evaluate metrics port values
+        metrics_ports = {
+            conf: value
+            for conf, value in self.config.items()
+            if conf.startswith(METRICS_PORT_CONFIG)
+        }
+        unique_ports = {}
+        for conf, value in metrics_ports.items():
+            if not _valid_metrics_port(value):
+                return f"Invalid value for {conf}: {value}. Must be between 1024 and 65535"
+            if value != -1 and value in unique_ports:
+                return f"Value for {conf}: {value} conflicts with {unique_ports[value]}"
+            unique_ports[value] = conf
+
         return None
