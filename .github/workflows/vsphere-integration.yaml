@@ -21,14 +21,14 @@ jobs:
         with:
           provider: vsphere
           credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
+          charmcraft-channel: ${{ steps.charmcraft.outputs.channel }}
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"
           bootstrap-options: "${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
           juju-channel: "3/stable"
-          charmcraft-channel: "${{ steps.charmcraft.outputs.channel }}"
 
       - name: Run test
-        run: tox -e func -- --basetemp=/home/ubuntu/pytest
+        run: tox -e integration -- --basetemp=/home/ubuntu/pytest
 
       - name: Setup Debug Artifact Collection
         if: ${{ failure() }}
@@ -41,7 +41,7 @@ jobs:
           mv juju-crashdump-* tmp/ | true
       - name: Upload debug artifacts
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-run-artifacts
           path: tmp
