@@ -51,6 +51,7 @@ def test_write_ceph_cli_config(ceph_config_file, harness, ceph_conf_directory):
     harness.charm.write_ceph_cli_config()
     path = ceph_config_file.return_value
     path.open.assert_called_once_with("w")
+    unit_name = harness.charm.unit.name.replace("/", "-")
     with path.open() as fp:
         lines = [
             "[global]",
@@ -67,7 +68,7 @@ def test_write_ceph_cli_config(ceph_config_file, harness, ceph_conf_directory):
             "debug osd = 1/5",
             "",
             "[client]",
-            "log file = /var/log/ceph.log",
+            f"log file = /var/log/ceph/{unit_name}.log",
             "",
         ]
         fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])

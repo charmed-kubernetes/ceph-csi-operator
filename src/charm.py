@@ -224,6 +224,7 @@ class CephCsiCharm(CharmBase):
     def write_ceph_cli_config(self) -> None:
         """Write Ceph CLI .conf file"""
         config = configparser.ConfigParser()
+        unit_name = self.unit.name.replace("/", "-")
         config["global"] = {
             "auth cluster required": self.auth or "",
             "auth service required": self.auth or "",
@@ -237,7 +238,7 @@ class CephCsiCharm(CharmBase):
             "debug mon": "1/5",
             "debug osd": "1/5",
         }
-        config["client"] = {"log file": "/var/log/ceph.log"}
+        config["client"] = {"log file": f"/var/log/ceph/{unit_name}.log"}
 
         with ceph_config_file().open("w") as fp:
             config.write(fp)
