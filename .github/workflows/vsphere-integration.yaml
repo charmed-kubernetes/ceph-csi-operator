@@ -8,7 +8,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+      - name: Read charmcraft version file
+        id: charmcraft
+        run: echo "channel=$(cat .charmcraft-channel)" >> $GITHUB_OUTPUT
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -21,7 +24,8 @@ jobs:
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"
           bootstrap-options: "${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
-          juju-channel: "3.1/stable"
+          juju-channel: "3/stable"
+          charmcraft-channel: "${{ steps.charmcraft.outputs.channel }}"
 
       - name: Run test
         run: tox -e func -- --basetemp=/home/ubuntu/pytest
