@@ -10,7 +10,12 @@ from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
 
-from manifests_base import AdjustNamespace, SafeManifest, StorageClassAddition
+from manifests_base import (
+    AdjustNamespace,
+    ConfigureLivenessPrometheus,
+    SafeManifest,
+    StorageClassAddition,
+)
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
@@ -156,6 +161,14 @@ class RBDManifests(SafeManifest):
                 CephStorageClass(self, "ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
                 AdjustNamespace(self),
+                ConfigureLivenessPrometheus(
+                    self, "Deployment", "csi-rbdplugin-provisioner", "rbdplugin-provisioner"
+                ),
+                ConfigureLivenessPrometheus(
+                    self, "Service", "csi-rbdplugin-provisioner", "rbdplugin-provisioner"
+                ),
+                ConfigureLivenessPrometheus(self, "DaemonSet", "csi-rbdplugin", "rbdplugin"),
+                ConfigureLivenessPrometheus(self, "Service", "csi-metrics-rbdplugin", "rbdplugin"),
             ],
         )
         self.charm = charm
