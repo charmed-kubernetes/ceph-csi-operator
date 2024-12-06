@@ -23,13 +23,15 @@ log = logging.getLogger(__name__)
 
 METRICS_PORT_CONFIG = "metrics-port"
 
+
 class InvalidMetricsPortError(Exception):
     pass
+
 
 def _validate_metrics_port(metrics_ports: Dict[str, int]) -> None:
     """
     Validate the metrics port.
-    
+
     Raises:
         InvalidMetricsPortError: If the metrics port is invalid (duplicate or not in range).
     """
@@ -42,10 +44,14 @@ def _validate_metrics_port(metrics_ports: Dict[str, int]) -> None:
         if value == -1:
             continue
 
-        if range_min <= value <= range_max: 
-            raise InvalidMetricsPortError(f"Invalid value for {conf}: {value}. Must be between {range_min} and {range_max}")
+        if range_min <= value <= range_max:
+            raise InvalidMetricsPortError(
+                f"Invalid value for {conf}: {value}. Must be between {range_min} and {range_max}"
+            )
         if value in unique_ports:
-            raise InvalidMetricsPortError(f"Value for {conf}: {value} conflicts with {unique_ports[value]}")
+            raise InvalidMetricsPortError(
+                f"Value for {conf}: {value} conflicts with {unique_ports[value]}"
+            )
         unique_ports[value] = conf
 
 

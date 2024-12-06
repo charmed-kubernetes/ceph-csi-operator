@@ -81,7 +81,11 @@ class ConfigureLivenessPrometheus(Patch):
 
             metrics_port_config = "metricsport"
             container.args = [
-                (f"--{metrics_port_config}={port}" if arg.startswith(f"--{metrics_port_config}=") else arg)
+                (
+                    f"--{metrics_port_config}={port}"
+                    if arg.startswith(f"--{metrics_port_config}=")
+                    else arg
+                )
                 for arg in container.args
             ]
             yield container
