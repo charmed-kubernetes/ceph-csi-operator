@@ -43,6 +43,7 @@ class ConfigureLivenessPrometheus(Patch):
         self.kind = kind
         self.name = name
         self.config = config
+        self._config_suffix = "metrics-port"
 
     def __call__(self, obj: AnyResource) -> None:
         """Configure liveness probe for Prometheus."""
@@ -58,7 +59,7 @@ class ConfigureLivenessPrometheus(Patch):
 
     def filter_portmap(self, portmap: list) -> Generator:
         """Update the http-metrics port mapping."""
-        port = self.manifests.config.get(f"metrics-port-{self.config}")
+        port = self.manifests.config.get(f"{self._config_suffix}-{self.config}")
         for mapping in portmap:
             if mapping.name != "http-metrics":
                 yield mapping
@@ -70,7 +71,7 @@ class ConfigureLivenessPrometheus(Patch):
 
     def filter_containers(self, containers: list) -> Generator:
         """Update the prometheus-liveness container."""
-        port = self.manifests.config.get(f"metrics-port-{self.config}")
+        port = self.manifests.config.get(f"{self._config_suffix}-{self.config}")
         for container in containers:
             if container.name != "liveness-prometheus":
                 yield container
@@ -78,8 +79,9 @@ class ConfigureLivenessPrometheus(Patch):
             if port == -1:
                 continue
 
+            metrics_port_config = "metricsport"
             container.args = [
-                (f"--metricsport={port}" if arg.startswith("--metricsport=") else arg)
+                (f"--{metrics_port_config}={port}" if arg.startswith(f"--{metrics_port_config}=") else arg)
                 for arg in container.args
             ]
             yield container
