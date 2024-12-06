@@ -39,12 +39,12 @@ def _validate_metrics_port(metrics_ports: Dict[str, int]) -> None:
     range_max = 65535
     unique_ports = {}
 
-    for conf, value in metrics_ports.items():
+    for conf, value in sorted(metrics_ports.items()):
         # -1 is default value hence skipped
         if value == -1:
             continue
 
-        if range_min <= value <= range_max:
+        if not (range_min <= value <= range_max):
             raise InvalidMetricsPortError(
                 f"Invalid value for {conf}: {value}. Must be between {range_min} and {range_max}"
             )
