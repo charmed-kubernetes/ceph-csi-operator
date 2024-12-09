@@ -21,6 +21,40 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+METRICS_PORT_CONFIG = "metrics-port"
+
+
+class InvalidMetricsPortError(Exception):
+    pass
+
+
+def _validate_metrics_port(metrics_ports: Dict[str, int]) -> None:
+    """
+    Validate the metrics port.
+
+    Raises:
+        InvalidMetricsPortError: If the metrics port is invalid (duplicate or not in range).
+    """
+    range_min = 1024
+    range_max = 65535
+    unique_ports = {}
+
+    for conf, value in sorted(metrics_ports.items()):
+        # -1 is default value hence skipped
+        if value == -1:
+            continue
+
+        if not (range_min <= value <= range_max):
+            raise InvalidMetricsPortError(
+                f"Invalid value for {conf}: {value}. Must be between {range_min} and {range_max}"
+            )
+        if value in unique_ports:
+            raise InvalidMetricsPortError(
+                f"Value for {conf}: {value} conflicts with {unique_ports[value]}"
+            )
+        unique_ports[value] = conf
+
+
 class CephConfig(Addition):
     """Create configmap for the ceph-conf."""
 
@@ -128,4 +162,16 @@ class ConfigManifests(SafeManifest):
             value = self.config.get(prop)
             if not value:
                 return f"Config manifests require the definition of '{prop}'"
+
+        # Evaluate metrics port values
+        metrics_ports = {
+            conf: value
+            for conf, value in self.config.items()
+            if conf.startswith(METRICS_PORT_CONFIG)
+        }
+        try:
+            _validate_metrics_port(metrics_ports=metrics_ports)
+        except InvalidMetricsPortError as e:
+            return str(f"Invalid metrics port: {e}")
+
         return None

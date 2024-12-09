@@ -2,6 +2,7 @@ import logging
 import unittest.mock as mock
 from textwrap import dedent
 
+import pytest
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import ConfigMap
 
@@ -70,3 +71,45 @@ def test_manifest_evaluation(caplog):
 
     charm.config = {"auth": "1234", "mon_hosts": ["10.10.10.1", "10.10.10.2"], "fsid": "cluster"}
     assert manifests.evaluate() is None
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "metrics-port-cephfsplugin",
+        "metrics-port-cephfsplugin-provisioner",
+        "metrics-port-rbdplugin",
+        "metrics-port-rbdplugin-provisioner",
+    ],
+)
+def test_metrics_ports_config(caplog, config):
+    caplog.set_level(logging.INFO)
+    charm = mock.MagicMock()
+    manifests = ConfigManifests(charm)
+    charm.config = {"auth": "1234", "mon_hosts": ["10.10.10.1", "10.10.10.2"], "fsid": "cluster"}
+
+    charm.config[config] = -1
+    assert manifests.evaluate() is None
+
+    charm.config[config] = 5000
+    assert manifests.evaluate() is None
+
+    charm.config[config] = 100
+    assert (
+        manifests.evaluate()
+        == f"Invalid metrics port: Invalid value for {config}: 100. Must be between 1024 and 65535"
+    )
+
+
+def test_metrics_ports_config_duplicates(caplog):
+    caplog.set_level(logging.INFO)
+    charm = mock.MagicMock()
+    manifests = ConfigManifests(charm)
+    charm.config = {"auth": "1234", "mon_hosts": ["10.10.10.1", "10.10.10.2"], "fsid": "cluster"}
+
+    charm.config["metrics-port-cephfsplugin"] = 5000
+    charm.config["metrics-port-cephfsplugin-provisioner"] = 5000
+    assert (
+        manifests.evaluate()
+        == "Invalid metrics port: Value for metrics-port-cephfsplugin-provisioner: 5000 conflicts with metrics-port-cephfsplugin"
+    )
