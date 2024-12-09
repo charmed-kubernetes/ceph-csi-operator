@@ -3,6 +3,8 @@ ops.manifest >= 1.1.3, < 2.0
 jinja2
 pyyaml
 
+charm-lib-contextual-status @ git+https://github.com/charmed-kubernetes/charm-lib-contextual-status
+charm-lib-reconciler @ git+https://github.com/charmed-kubernetes/charm-lib-reconciler@main
 interface_ceph_client @ git+https://github.com/openstack/charm-ops-interface-ceph-client@d4d0cefc5e92edd28cdbf5d00e190d4498896418
 charmhelpers == 1.2.1
 setuptools == 69.5.1
