@@ -8,7 +8,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from manifests_cephfs import CephFSManifests, CephStorageClass, StorageSecret
 
 
-def test_storage_secret_modeled(caplog):
+def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     ss = StorageSecret(manifest)
@@ -41,7 +41,7 @@ def test_storage_secret_modeled(caplog):
     assert "Modelling secret data for cephfs storage." in caplog.text
 
 
-def test_ceph_storage_class_modeled(caplog):
+def test_ceph_storage_class_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     csc = CephStorageClass(manifest)

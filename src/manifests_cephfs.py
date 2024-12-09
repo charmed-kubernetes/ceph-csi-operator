@@ -12,7 +12,12 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
 from ops.manifests.manipulations import Subtraction
 
-from manifests_base import AdjustNamespace, SafeManifest, StorageClassAddition
+from manifests_base import (
+    AdjustNamespace,
+    ConfigureLivenessPrometheus,
+    SafeManifest,
+    StorageClassAddition,
+)
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
@@ -182,6 +187,16 @@ class CephFSManifests(SafeManifest):
                 RbacAdjustments(self),
                 RemoveCephFS(self),
                 AdjustNamespace(self),
+                ConfigureLivenessPrometheus(
+                    self, "Deployment", "csi-cephfsplugin-provisioner", "cephfsplugin-provisioner"
+                ),
+                ConfigureLivenessPrometheus(
+                    self, "Service", "csi-cephfsplugin-provisioner", "cephfsplugin-provisioner"
+                ),
+                ConfigureLivenessPrometheus(self, "DaemonSet", "csi-cephfsplugin", "cephfsplugin"),
+                ConfigureLivenessPrometheus(
+                    self, "Service", "csi-metrics-cephfsplugin", "cephfsplugin"
+                ),
             ],
         )
         self.charm = charm
