@@ -74,6 +74,38 @@ options:
       https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
     type: string
 
+  metrics-port-cephfsplugin:
+    default: -1
+    description: |
+      Port for csi-cephfsplugin liveness-prometheus metrics
+
+      If set to -1, the metrics service will not be created
+    type: int
+
+  metrics-port-cephfsplugin-provisioner:
+    default: -1
+    description: |
+      Port for csi-cephfsplugin-provisioner liveness-prometheus metrics
+
+      If set to -1, the metrics service will not be created
+    type: int
+
+  metrics-port-rbdplugin:
+    default: -1
+    description: |
+      Port for csi-rbdplugin liveness-prometheus metrics
+
+      If set to -1, the metrics service will not be created
+    type: int
+
+  metrics-port-rbdplugin-provisioner:
+    default: -1
+    description: |
+      Port for csi-rbdplugin-provisioner liveness-prometheus metrics
+
+      If set to -1, the metrics service will not be created
+    type: int
+
   namespace:
     type: string
     default: ""
