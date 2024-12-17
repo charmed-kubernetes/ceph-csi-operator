@@ -1,26 +1,65 @@
+# Copyright 2024 Canonical
+# See LICENSE file for licensing details.
+
 type: charm
+name: ceph-csi
+summary: Ceph CSI plugin for Kubernetes
+description: |
+  This (machine) charm deploys Container Storage Interface (CSI) plugin that
+  enables Kubernetes to use ceph as a storage backend.
+links:
+  contact:
+  - Mateo Florido <mateo.florido@canonical.com>
+  - Adam Dyess <adam.dyess@canonical.com>
+  documentation: https://discourse.charmhub.io/t/ceph-csi-docs-index/????
+  source: https://github.com/charmed-kubernetes/ceph-csi-operator
+  issues:
+  - https://bugs.launchpad.net/charm-ceph-csi/+filebug
+
+assumes:
+- juju >= 3.1
+
+requires:
+  ceph-client:
+    interface: ceph-client
+  kubernetes:
+    interface: juju-info
+    scope: container
+  kubernetes-info:
+    interface: kubernetes-info
+    scope: container
+
+subordinate: true
+
 parts:
   charm:
+    plugin: charm
     build-packages: [git]
     charm-python-packages:
       - setuptools  # for jinja2
     prime:
       - upstream/**
 bases:
-  - build-on:
-    - name: "ubuntu"
-      channel: "20.04"
-      architectures: ["amd64"]
-    run-on:
-    - name: "ubuntu"
-      channel: "20.04"
-      architectures: 
-      - amd64
-      - s390x
-      - arm64
-    - name: "ubuntu"
-      channel: "22.04"
-      architectures: 
-      - amd64
-      - s390x
-      - arm64
+- build-on:
+  - name: "ubuntu"
+    channel: "20.04"
+    architectures: ["amd64"]
+  run-on:
+  - name: "ubuntu"
+    channel: "20.04"
+    architectures: 
+    - amd64
+    - s390x
+    - arm64
+  - name: "ubuntu"
+    channel: "22.04"
+    architectures: 
+    - amd64
+    - s390x
+    - arm64
+  - name: "ubuntu"
+    channel: "24.04"
+    architectures:
+    - amd64
+    - s390x
+    - arm64
