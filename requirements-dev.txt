@@ -8,3 +8,4 @@ tox
 isort
 black
 types-PyYAML
+uv
