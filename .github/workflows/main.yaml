@@ -18,9 +18,8 @@ jobs:
 
   lint-unit-uv:
     name: Lint / Unit Tests
-    uses: charmed-kubernetes/workflows/.github/workflows/lint-unit.yaml@akd/provide-uv-support
+    uses: charmed-kubernetes/workflows/.github/workflows/lint-unit.yaml@main
     with:
-      python: "['3.8', '3.10', '3.12']"
       with-uv: true
     needs:
       - call-inclusive-naming-check
