@@ -205,7 +205,6 @@ class CephFSManifests(SafeManifest):
     def config(self) -> Dict:
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
-        config["image-registry"] = "rocks.canonical.com:443/cdk"
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.kubernetes_context)
