@@ -121,7 +121,7 @@ class CephCsiConfig(Addition):
 
 
 class ConfigManifests(SafeManifest):
-    """Deployment Specific details for the aws-ebs-csi-driver."""
+    """Manage Ceph CSI configuration manifests."""
 
     def __init__(self, charm: "CephCsiCharm"):
         self.namespace = cast(str, charm.stored.namespace)
