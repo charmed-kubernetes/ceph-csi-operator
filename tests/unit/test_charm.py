@@ -410,18 +410,12 @@ def test_cleanup(_purge_manifest, harness, caplog):
     _purge_manifest.assert_called()
 
 
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-def test_action_list_versions(harness):
-    harness.begin()
-
-    mock_event = mock.MagicMock()
-    assert harness.charm._list_versions(mock_event) is None
-    expected_results = {
-        "cephfs-versions": "v3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
-        "config-versions": "",
-        "rbd-versions": "v3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
-    }
-    mock_event.set_results.assert_called_once_with(expected_results)
+@mock.patch("charm.Collector", autospec=True)
+def test_action_list_versions(mock_collector, harness):
+    harness.begin_with_initial_hooks()
+    harness.charm.collector = mock_collector()
+    harness.run_action("list-versions")
+    harness.charm.collector.list_versions.assert_called_once()
 
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
