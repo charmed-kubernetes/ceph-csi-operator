@@ -115,3 +115,21 @@ def test_manifest_evaluation(caplog):
         "kubernetes_key": "123",
     }
     assert manifests.evaluate() is None
+
+    charm.config["cephfs-tolerations"] = "key=value,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephFS Pods: Invalid tolerations: Invalid operator='Foo'"
+    )
+
+    charm.config["cephfs-tolerations"] = "key=value,Exists,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephFS Pods: Invalid tolerations: Invalid effect='Foo'"
+    )
+
+    charm.config["cephfs-tolerations"] = "key=value,Exists,NoSchedule,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephFS Pods: Invalid tolerations: Too many effects='NoSchedule,Foo'"
+    )

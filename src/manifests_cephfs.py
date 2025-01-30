@@ -3,10 +3,9 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from lightkube.codecs import AnyResource
-from lightkube.models.core_v1 import Toleration
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
@@ -14,6 +13,7 @@ from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
     AdjustNamespace,
+    CephToleration,
     ConfigureLivenessPrometheus,
     SafeManifest,
     StorageClassAddition,
@@ -121,8 +121,13 @@ class CephStorageClass(StorageClassAddition):
 class ProvisionerAdjustments(Patch):
     """Update Cephfs provisioner."""
 
+    def tolerations(self) -> Tuple[List[CephToleration], Optional[str]]:
+        cfg = self.manifests.config.get("cephfs-tolerations") or ""
+        return CephToleration.from_comma_separated(cfg)
+
     def __call__(self, obj: AnyResource) -> None:
         """Use the provisioner-replicas and enable-host-networking to update obj."""
+        tolerations, _ = self.tolerations()
         if (
             obj.kind == "Deployment"
             and obj.metadata
@@ -131,12 +136,15 @@ class ProvisionerAdjustments(Patch):
             obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
             log.info(f"Updating deployment replicas to {replica}")
 
+            obj.spec.template.spec.tolerations = tolerations
+            log.info("Updating deployment tolerations")
+
             obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
                 "enable-host-networking"
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
         if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-cephfsplugin":
-            obj.spec.template.spec.tolerations = [Toleration(operator="Exists")]
+            obj.spec.template.spec.tolerations = tolerations
             log.info("Updating daemonset tolerations to operator=Exists")
 
             kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
@@ -231,4 +239,12 @@ class CephFSManifests(SafeManifest):
             value = self.config.get(prop)
             if not value:
                 return f"CephFS manifests require the definition of '{prop}'"
+
+        pa_manipulator = next(
+            m for m in self.manipulations if isinstance(m, ProvisionerAdjustments)
+        )
+        _, err = pa_manipulator.tolerations()
+        if err:
+            return f"Cannot adjust CephFS Pods: {err}"
+
         return None

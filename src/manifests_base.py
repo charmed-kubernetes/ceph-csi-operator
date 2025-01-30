@@ -2,10 +2,11 @@ import logging
 import pickle
 from abc import ABCMeta, abstractmethod
 from hashlib import md5
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
+from lightkube.models.core_v1 import Toleration
 from ops.manifests import Addition, Manifests, Patch
 
 log = logging.getLogger(__name__)
@@ -118,3 +119,42 @@ class StorageClassAddition(Addition):
                 parameters.pop(adjustment[:-1], None)
             else:
                 log.warning("Invalid parameter: %s in %s", adjustment, config)
+
+
+class CephToleration(Toleration):
+    @classmethod
+    def from_string(cls, toleration_str: str) -> "CephToleration":
+        """Parses a toleration string into a Toleration object.
+
+        Raises:
+            ValueError: If the string is not a valid toleration.
+        """
+        # A missing ',' will raise ValueError
+        key_value, operator, *effects = toleration_str.split(",")
+        # A missing '=' will raise ValueError
+        key, value = key_value.split("=", 1)
+
+        if operator not in ["Exists", "Equal"]:
+            raise ValueError(f"Invalid {operator=}")
+        if len(effects) > 1:
+            raise ValueError(f"Too many effects='{','.join(effects)}'")
+        effect = effects[0] if effects else ""
+        if effect not in ["NoSchedule", "PreferNoSchedule", "NoExecute", ""]:
+            raise ValueError(f"Invalid {effect=}")
+
+        return cls(
+            key=key if key else None,  # Convert empty string to None
+            value=value if value else None,
+            operator=operator,
+            effect=effect if effect else None,
+        )
+
+    @classmethod
+    def from_comma_separated(
+        cls, tolerations: str
+    ) -> Tuple[List["CephToleration"], Optional[str]]:
+        """Parses a comma separated string of tolerations into a list of Toleration objects."""
+        try:
+            return [cls.from_string(toleration) for toleration in tolerations.split()], None
+        except ValueError as e:
+            return [], f"Invalid tolerations: {e}"
