@@ -91,13 +91,6 @@ class ConfigureLivenessPrometheus(Patch):
             yield container
 
 
-def update_storage_params(ceph_type: str, config: Dict[str, Any], params: Dict[str, str]) -> None:
-    """Adjust parameters for storage class."""
-    cfg_name = f"{ceph_type}-storage-class-parameters"
-    if not (adjustments := config.get(cfg_name)):
-        log.info(f"No adjustments for {ceph_type} storage-class parameters")
-        return
-
 class CephToleration(Toleration):
     @classmethod
     def _from_string(cls, toleration_str: str) -> "CephToleration":
@@ -137,6 +130,7 @@ class CephToleration(Toleration):
             return [cls._from_string(toleration) for toleration in tolerations.split()]
         except ValueError as e:
             raise ValueError(f"Invalid tolerations: {e}") from e
+
 
 def update_storage_params(ceph_type: str, config: Dict[str, Any], params: Dict[str, str]) -> None:
     """Adjust parameters for storage class."""
