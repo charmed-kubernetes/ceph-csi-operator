@@ -2,7 +2,7 @@ import logging
 import pickle
 from abc import ABCMeta, abstractmethod
 from hashlib import md5
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
@@ -123,7 +123,7 @@ class StorageClassAddition(Addition):
 
 class CephToleration(Toleration):
     @classmethod
-    def from_string(cls, toleration_str: str) -> "CephToleration":
+    def _from_string(cls, toleration_str: str) -> "CephToleration":
         """Parses a toleration string into a Toleration object.
 
         Raises:
@@ -150,11 +150,13 @@ class CephToleration(Toleration):
         )
 
     @classmethod
-    def from_comma_separated(
-        cls, tolerations: str
-    ) -> Tuple[List["CephToleration"], Optional[str]]:
-        """Parses a comma separated string of tolerations into a list of Toleration objects."""
+    def from_space_separated(cls, tolerations: str) -> List["CephToleration"]:
+        """Parses a space separated string of tolerations into a list of Toleration objects.
+
+        Raises:
+            ValueError: If any of the tolerations are invalid
+        """
         try:
-            return [cls.from_string(toleration) for toleration in tolerations.split()], None
+            return [cls._from_string(toleration) for toleration in tolerations.split()]
         except ValueError as e:
-            return [], f"Invalid tolerations: {e}"
+            raise ValueError(f"Invalid tolerations: {e}") from e

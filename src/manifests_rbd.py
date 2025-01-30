@@ -3,7 +3,7 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
@@ -106,13 +106,13 @@ class CephStorageClass(StorageClassAddition):
 class ProvisionerAdjustments(Patch):
     """Update RBD provisioner."""
 
-    def tolerations(self) -> Tuple[List[CephToleration], Optional[str]]:
+    def tolerations(self) -> List[CephToleration]:
         cfg = self.manifests.config.get("ceph-rbd-tolerations") or ""
-        return CephToleration.from_comma_separated(cfg)
+        return CephToleration.from_space_separated(cfg)
 
     def __call__(self, obj: AnyResource) -> None:
         """Mutates CSI RBD Provisioner Deployment replicas/hostNetwork and DaemonSet kubelet_dir paths."""
-        tolerations, _ = self.tolerations()
+        tolerations = self.tolerations()
         if (
             obj.kind == "Deployment"
             and obj.metadata
@@ -213,8 +213,9 @@ class RBDManifests(SafeManifest):
         pa_manipulator = next(
             m for m in self.manipulations if isinstance(m, ProvisionerAdjustments)
         )
-        _, err = pa_manipulator.tolerations()
-        if err:
+        try:
+            pa_manipulator.tolerations()
+        except ValueError as err:
             return f"Cannot adjust CephRBD Pods: {err}"
 
         return None

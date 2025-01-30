@@ -121,13 +121,15 @@ class CephStorageClass(StorageClassAddition):
 class ProvisionerAdjustments(Patch):
     """Update Cephfs provisioner."""
 
-    def tolerations(self) -> Tuple[List[CephToleration], Optional[str]]:
+    def tolerations(self) -> Tuple[List[CephToleration], bool]:
         cfg = self.manifests.config.get("cephfs-tolerations") or ""
-        return CephToleration.from_comma_separated(cfg)
+        if cfg == "$csi-cephfsplugin-legacy$":
+            return [], True
+        return CephToleration.from_space_separated(cfg), False
 
     def __call__(self, obj: AnyResource) -> None:
         """Use the provisioner-replicas and enable-host-networking to update obj."""
-        tolerations, _ = self.tolerations()
+        tolerations, legacy = self.tolerations()
         if (
             obj.kind == "Deployment"
             and obj.metadata
@@ -144,8 +146,10 @@ class ProvisionerAdjustments(Patch):
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
         if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-cephfsplugin":
-            obj.spec.template.spec.tolerations = tolerations
-            log.info("Updating daemonset tolerations to operator=Exists")
+            obj.spec.template.spec.tolerations = (
+                tolerations if not legacy else [CephToleration(operator="Exists")]
+            )
+            log.info("Updating daemonset tolerations")
 
             kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
 
@@ -243,8 +247,9 @@ class CephFSManifests(SafeManifest):
         pa_manipulator = next(
             m for m in self.manipulations if isinstance(m, ProvisionerAdjustments)
         )
-        _, err = pa_manipulator.tolerations()
-        if err:
+        try:
+            pa_manipulator.tolerations()
+        except ValueError as err:
             return f"Cannot adjust CephFS Pods: {err}"
 
         return None
