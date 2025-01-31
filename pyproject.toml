@@ -1,0 +1,82 @@
+[lint]
+ignore = ["E501", "D107"]
+extend-ignore = [
+    "D203",
+    "D204",
+    "D213",
+    "D215",
+    "D400",
+    "D404",
+    "D406",
+    "D407",
+    "D408",
+    "D409",
+    "D413",
+]
+per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104"]}
+
+[lint.mccabe]
+max-complexity = 10
+
+
+
+# Testing tools configuration
+[tool.coverage.run]
+branch = true
+
+# Formatting tools configuration
+[tool.black]
+line-length = 99
+target-version = ["py38"]
+
+[tool.coverage.report]
+show_missing = true
+
+
+[tool.isort]
+line_length=99
+multi_line_output=3
+include_trailing_comma = true
+use_parentheses = true
+
+[tool.mypy]
+warn_unused_ignores = true
+warn_unused_configs = true
+warn_unreachable = true
+disallow_untyped_defs = true
+# Due to python 3.5 support we can't enforce variable type annotations
+disable_error_code = "var-annotated"
+
+[[tool.mypy.overrides]]
+module = "charms.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "lightkube.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "ops.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+
+# Linting tools configuration
+[tool.ruff]
+# line-length = 99
+# select = ["E", "W", "F", "C", "N", "D", "I001"]
+extend-exclude = ["__pycache__", "*.egg_info"]
+
+[tool.codespell]
+skip = "build,lib,venv,icon.svg,.tox,.git,.mypy_cache,.ruff_cache,.coverage"
+
+[tool.pyright]
+extraPaths = ["./lib"]
+
+[project]
+name = "ceph-csi"
+dynamic = ["version"]
+dependencies = [
+    "tox-uv"
+]
