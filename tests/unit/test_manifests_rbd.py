@@ -94,3 +94,21 @@ def test_manifest_evaluation(caplog):
 
     charm.config = {"user": "cephx", "fsid": "cluster", "kubernetes_key": "123"}
     assert manifests.evaluate() is None
+
+    charm.config["ceph-rbd-tolerations"] = "key=value,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephRBD Pods: Invalid tolerations: Invalid operator='Foo'"
+    )
+
+    charm.config["ceph-rbd-tolerations"] = "key=value,Exists,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephRBD Pods: Invalid tolerations: Invalid effect='Foo'"
+    )
+
+    charm.config["ceph-rbd-tolerations"] = "key=value,Exists,NoSchedule,Foo"
+    assert (
+        manifests.evaluate()
+        == "Cannot adjust CephRBD Pods: Invalid tolerations: Too many effects='NoSchedule,Foo'"
+    )
