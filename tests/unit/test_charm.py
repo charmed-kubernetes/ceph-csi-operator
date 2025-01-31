@@ -16,7 +16,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ManifestClientError
 from ops.testing import Harness
 
-from charm import CephCsiCharm
+from charm import CephCsiCharm, CephFilesystem
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_directo
         "user": "ceph-csi",
         "provisioner_replicas": 3,
         "enable_host_network": "false",
-        "fsname": None,
+        "fs_list": [],
     }
 
     assert harness.charm.ceph_context == expected_context
@@ -159,7 +159,7 @@ def mocked_handlers():
         "check_namespace",
         "check_ceph_client",
         "configure_ceph_cli",
-        "check_cephfs",
+        "enforce_cephfs_enabled",
         "evaluate_manifests",
         "install_manifests",
         "_update_status",
@@ -181,7 +181,7 @@ def test_set_leader(harness):
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
     with mocked_handlers() as handlers:
         handlers["_destroying"].return_value = False
-        handlers["check_cephfs"].return_value = False
+        handlers["enforce_cephfs_enabled"].return_value = False
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
     assert harness.charm.unit.status.message == "Ready"
@@ -426,7 +426,7 @@ def test_action_list_versions(harness):
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
+@mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
 def test_action_manifest_resources(harness):
     harness.begin()
 
@@ -436,6 +436,7 @@ def test_action_manifest_resources(harness):
         "config-missing": "ConfigMap/default/ceph-csi-encryption-kms-config",
         "rbd-missing": "\n".join(
             [
+                "CSIDriver/rbd.csi.ceph.com",
                 "ClusterRole/rbd-csi-nodeplugin",
                 "ClusterRole/rbd-external-provisioner-runner",
                 "ClusterRoleBinding/rbd-csi-nodeplugin",
@@ -466,7 +467,7 @@ def test_action_manifest_resources(harness):
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fsname", mock.MagicMock(return_value=None))
+@mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
 def test_action_sync_resources_install_failure(harness, lk_client):
     harness.begin()
 
@@ -518,17 +519,27 @@ def test_failed_cli_fsid(harness):
 
 
 @pytest.mark.parametrize("failure", [SubprocessError, lambda *_: "invalid"])
-def test_failed_cli_fsname(harness, failure):
+def test_failed_cli_fs_list(harness, failure):
     harness.begin()
     with mock.patch("charm.CephCsiCharm.ceph_cli", side_effect=failure):
-        assert harness.charm.get_ceph_fsname() is None
+        assert harness.charm.get_ceph_fs_list() == []
 
 
-def test_cli_fsname(request, harness):
+def test_cli_fsdata(request, harness):
     harness.begin()
-    pools = json.dumps([{"data_pools": ["ceph-fs_data"], "name": request.node.name}])
+    fs_name = request.node.name
+    fs_data = [
+        {
+            "name": f"{fs_name}-alt",
+            "metadata_pool": f"{fs_name}-alt_metadata",
+            "metadata_pool_id": 5,
+            "data_pool_ids": [4],
+            "data_pools": [f"{fs_name}-alt_data"],
+        }
+    ]
+    pools = json.dumps(fs_data)
     with mock.patch("charm.CephCsiCharm.ceph_cli", return_value=pools):
-        assert harness.charm.get_ceph_fsname() == request.node.name
+        assert harness.charm.get_ceph_fs_list() == [CephFilesystem(**fs) for fs in fs_data]
 
 
 def test_kubelet_dir(harness):
@@ -542,31 +553,31 @@ def test_kubelet_dir(harness):
     assert harness.charm.kubelet_dir == "/var/snap/k8s/common/var/lib/kubelet"
 
 
-def test_check_cephfs(harness):
+@mock.patch("charm.CephCsiCharm._purge_manifest_by_name")
+def test_enforce_cephfs_enabled(mock_purge, harness):
     harness.begin()
 
-    # no enable, no fsname -> no problem
-    with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
-        mock_ctx.return_value = {"fsname": None}
-        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
-            harness.set_leader(True)
-            harness.update_config({"cephfs-enable": False})
-    assert harness.charm.unit.status.name == "active"
+    with reconcile_this(harness, lambda _: harness.charm.enforce_cephfs_enabled()):
+        # disabled on leader, purge
+        harness.disable_hooks()
+        harness.set_leader(True)
+        harness.enable_hooks()
+        harness.update_config({"cephfs-enable": False})
+        assert harness.charm.unit.status.name == "active"
+        mock_purge.assert_called_once_with("cephfs")
+        mock_purge.reset_mock()
 
-    # enable, fsname -> no problem
-    with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
-        mock_ctx.return_value = {"fsname": "abcd"}
-        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
-            harness.update_config({"cephfs-enable": True})
-    assert harness.charm.unit.status.name == "active"
+        # enabled on leader, no purge
+        harness.update_config({"cephfs-enable": True})
+        mock_purge.assert_not_called()
 
-    # enable, no fsname -> problem
-    with mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock) as mock_ctx:
-        mock_ctx.return_value = {"fsname": None}
-        with reconcile_this(harness, lambda _: harness.charm.check_cephfs()):
-            harness.update_config({"cephfs-enable": True})
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "CephFS is not usable; set 'cephfs-enable=False'"
+        # disabled on follower, no purge
+        harness.disable_hooks()
+        harness.set_leader(False)
+        harness.enable_hooks()
+        harness.update_config({"cephfs-enable": False})
+        mock_purge.assert_not_called()
+        assert harness.charm.unit.status.name == "active"
 
 
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
