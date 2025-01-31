@@ -48,6 +48,32 @@ options:
       https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
     type: string
 
+  cephfs-tolerations:
+    default: "$csi-cephfsplugin-legacy$"
+    description: |
+      Tolerations to be used when creating the cephfs pods for Daemonsets and Deployments.
+
+      Declare tolerations in key=value,operator,effect format, separating each by spaces.
+
+      Optional tolerations can be found in the kubernetes documentation:
+      https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+      Note:  The default value "$csi-cephfsplugin-legacy$" is a special token
+      which applies a "=,Exists" toleration only to pods associated with
+      csi-cephfsplugin.
+    type: string
+
+  ceph-rbd-tolerations:
+    default: ""
+    description: |
+      Tolerations to be used when creating the rbd pods for Daemonsets and Deployments.
+
+      Declare tolerations in key=value,operator,effect format, separating each by spaces.
+
+      Optional tolerations can be found in the kubernetes documentation:
+      https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+    type: string
+
   ceph-xfs-storage-class-parameters:
     default: "imageFeatures=layering"
     description: |
