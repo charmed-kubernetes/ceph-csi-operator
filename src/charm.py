@@ -23,7 +23,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, ManifestClientError
 
 from manifests_base import Manifests, SafeManifest
-from manifests_cephfs import CephFSManifests, CephStorageClass
+from manifests_cephfs import CephFilesystem, CephFSManifests, CephStorageClass
 from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
@@ -228,20 +228,17 @@ class CephCsiCharm(ops.CharmBase):
             return ""
 
     @lru_cache(maxsize=None)
-    def get_ceph_fsname(self) -> Optional[str]:
-        """Get the Ceph FS Name."""
+    def get_ceph_fs_list(self) -> List[CephFilesystem]:
+        """Get a list of CephFS names and list of associated pools."""
         try:
             data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
         except (subprocess.SubprocessError, ValueError) as e:
             logger.error(
-                "get_ceph_fsname: Failed to get CephFS name, reporting as None, error: %s", e
+                "get_ceph_fs_list: Failed to find CephFS name, reporting as None, error: %s", e
             )
-            return None
-        for fs in data:
-            if CephStorageClass.POOL in fs["data_pools"]:
-                logger.error("get_ceph_fsname: got cephfs name: %s", fs["name"])
-                return fs["name"]
-        return None
+            return []
+
+        return [CephFilesystem(**fs) for fs in data]
 
     @property
     def provisioner_replicas(self) -> int:
@@ -285,7 +282,7 @@ class CephCsiCharm(ops.CharmBase):
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
-            "fsname": self.get_ceph_fsname(),
+            CephStorageClass.FILESYSTEM_LISTING: self.get_ceph_fs_list(),
         }
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
@@ -306,20 +303,11 @@ class CephCsiCharm(ops.CharmBase):
                 status.add(ops.WaitingStatus("Waiting for Kubernetes API"))
                 raise status.ReconcilerError("Waiting for Kubernetes API")
 
-    @status.on_error(ops.BlockedStatus("CephFS is not usable; set 'cephfs-enable=False'"))
-    def check_cephfs(self) -> None:
-        self.unit.status = ops.MaintenanceStatus("Evaluating CephFS capability")
+    def enforce_cephfs_enabled(self) -> None:
+        """Determine if CephFS should be enabled or disabled."""
         disabled = self.config.get("cephfs-enable") is False
-        if disabled:
-            # not enabled, not a problem
-            logger.info("CephFS is disabled")
-        elif not self.ceph_context.get("fsname", None):
-            logger.error(
-                "Ceph CLI failed to find a CephFS fsname. Run 'juju config cephfs-enable=False' until ceph-fs is usable."
-            )
-            raise status.ReconcilerError("CephFS is not usable; set 'cephfs-enable=False'")
-
         if disabled and self.unit.is_leader():
+            self.unit.status = ops.MaintenanceStatus("Disabling CephFS")
             self._purge_manifest_by_name("cephfs")
 
     def evaluate_manifests(self) -> int:
@@ -390,7 +378,7 @@ class CephCsiCharm(ops.CharmBase):
         self.check_namespace()
         self.check_ceph_client()
         self.configure_ceph_cli()
-        self.check_cephfs()
+        self.enforce_cephfs_enabled()
         hash = self.evaluate_manifests()
         self.install_manifests(config_hash=hash)
         self._update_status()

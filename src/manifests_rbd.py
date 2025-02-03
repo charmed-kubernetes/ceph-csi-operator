@@ -15,7 +15,7 @@ from manifests_base import (
     CephToleration,
     ConfigureLivenessPrometheus,
     SafeManifest,
-    StorageClassAddition,
+    update_storage_params,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(StorageClassAddition):
+class CephStorageClass(Addition):
     """Create ceph storage classes."""
 
     REQUIRED_CONFIG = {"fsid"}
@@ -89,7 +89,7 @@ class CephStorageClass(StorageClassAddition):
             "pool": f"{self.fs_type}-pool",
         }
 
-        self.update_parameters(parameters)
+        update_storage_params(self.name, self.manifests.config, parameters)
 
         return StorageClass.from_dict(
             dict(
