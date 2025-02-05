@@ -4,18 +4,19 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
+from ops.manifests import Addition, ConfigRegistry, Patch
 from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
     ConfigureLivenessPrometheus,
+    ManifestLabelExcluder,
     SafeManifest,
     update_storage_params,
 )
@@ -174,6 +175,11 @@ class CephStorageClass(Addition):
 
     def __call__(self) -> List[AnyResource]:
         """Craft the storage class object."""
+        if cast(SafeManifest, self.manifests).purgeable:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return [StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))]
         return [self.create(class_param) for class_param in self.parameter_list()]
 
 
@@ -254,7 +260,7 @@ class CephFSManifests(SafeManifest):
             "upstream/cephfs",
             [
                 StorageSecret(self),
-                ManifestLabel(self),
+                ManifestLabelExcluder(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
                 CephStorageClass(self),
@@ -290,7 +296,7 @@ class CephFSManifests(SafeManifest):
 
         config["namespace"] = self.charm.stored.namespace
         config["release"] = config.pop("release", None)
-        config["enabled"] = self.purgeable or config.get("cephfs-enable", None)
+        config["enabled"] = config.get("cephfs-enable", None)
         return config
 
     def evaluate(self) -> Optional[str]:

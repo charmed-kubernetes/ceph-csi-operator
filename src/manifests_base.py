@@ -6,7 +6,8 @@ from typing import Any, Dict, Generator, List, Optional
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
-from ops.manifests import Manifests, Patch
+from ops.manifests import ManifestLabel, Manifests, Patch
+from ops.manifests.literals import APP_LABEL
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,16 @@ class AdjustNamespace(Patch):
         if isinstance(obj, NamespacedResource) and obj.metadata:
             ns = self.manifests.config["namespace"]
             obj.metadata.namespace = ns
+
+
+class ManifestLabelExcluder(ManifestLabel):
+    """Exclude applying labels to CSIDriver."""
+
+    def __call__(self, obj: AnyResource) -> None:
+        super().__call__(obj)
+        if obj.kind == "CSIDriver" and obj.metadata and obj.metadata.labels:
+            # Remove the app label from the CSIDriver to disassociate it from the application
+            obj.metadata.labels.pop(APP_LABEL, None)
 
 
 class ConfigureLivenessPrometheus(Patch):
