@@ -5,8 +5,10 @@
 
 import logging
 from pathlib import Path
+from typing import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 import yaml
 from kubernetes import client, config
 from pytest_operator.plugin import OpsTest
@@ -20,8 +22,8 @@ def namespace(ops_test) -> str:
     return ops_test.model_name
 
 
-@pytest.fixture(scope="module")
-async def kube_config(ops_test: OpsTest) -> Path:
+@pytest_asyncio.fixture(scope="module")
+async def kube_config(ops_test: OpsTest) -> AsyncGenerator[Path, None]:
     """Return path to the kube config of the tested Kubernetes cluster.
 
     Config file is fetched from kubernetes-control-plane unit and stored in the temporary file.
@@ -47,7 +49,7 @@ async def kube_config(ops_test: OpsTest) -> Path:
     yield kubeconfig_path
 
 
-@pytest.fixture()
+@pytest_asyncio.fixture()
 async def cleanup_k8s(kube_config):
     """Cleanup kubernetes resources created during test."""
     yield  # act only on teardown
