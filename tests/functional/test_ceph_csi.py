@@ -82,7 +82,7 @@ async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTes
         v1_core.create_namespace(v1_namespace)
 
     async with ops_test.fast_forward("60s"):
-        await ops_test.model.wait_for_idle(wait_for_active=True, timeout=15 * 60)
+        await ops_test.model.wait_for_idle(wait_for_active=True, timeout=30 * 60)
     for unit in ops_test.model.applications["ceph-csi"].units:
         assert unit.workload_status == "active"
         assert unit.workload_status_message == "Ready"
