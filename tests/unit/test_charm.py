@@ -420,9 +420,9 @@ def test_action_list_versions(harness):
     mock_event = mock.MagicMock(spec=ops.ActionEvent)
     assert harness.charm._list_versions(mock_event) is None
     expected_results = {
-        "cephfs-versions": "v3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+        "cephfs-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
         "config-versions": "",
-        "rbd-versions": "v3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+        "rbd-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
     }
     mock_event.set_results.assert_called_once_with(expected_results)
 
