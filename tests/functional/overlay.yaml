@@ -19,14 +19,14 @@ applications:
   ceph-mon:
     charm: ceph-mon
     channel: "quincy/stable"
-    num_units: 3
+    num_units: 1
     constraints: "cores=2 mem=4G root-disk=16G"
     options:
-      monitor-count: '3'
+      monitor-count: '1'
   ceph-osd:
     charm: ceph-osd
     channel: "quincy/stable"
-    num_units: 3
+    num_units: 2
     constraints: "cores=2 mem=4G root-disk=16G"
     options:
       osd-devices: /srv/osd
@@ -38,12 +38,17 @@ applications:
     options:
       provisioner-replicas: 1
       namespace: {{ namespace }}
+  ceph-csi-alt:
+    # This is an alternative ceph-csi charm that is used to test
+    # the ability to deploy multiple ceph-csi charms in the same
+    # model.  It's used in test_duplicate_ceph_csi
+    charm: {{ charm }}
+    options:
+      provisioner-replicas: 1
+      namespace: {{ namespace }}
 relations:
-- - ceph-osd
-  - ceph-mon
-- - ceph-fs
-  - ceph-mon
-- - ceph-csi
-  - kubernetes-control-plane
-- - ceph-csi
-  - ceph-mon:client
+- [ceph-osd,     ceph-mon]
+- [ceph-fs,      ceph-mon]
+- [ceph-csi,     ceph-mon:client]
+- [ceph-csi-alt, ceph-mon:client]
+- [ceph-csi,     kubernetes-control-plane]

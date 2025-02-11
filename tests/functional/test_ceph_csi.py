@@ -11,25 +11,34 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from kubernetes import client, config, utils
 from pytest_operator.plugin import OpsTest
 from utils import render_j2_template, wait_for_pod
 
 logger = logging.getLogger(__name__)
 
-TEMPLATE_DIR = "./tests/functional/templates/"
+TEST_PATH = Path(__file__).parent
+TEMPLATE_DIR = TEST_PATH / "templates"
+TEST_OVERLAY = TEST_PATH / "overlay.yaml"
 
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
 READING_POD_TEMPLATE = "reading_pod.yaml.j2"
 WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 
 SUCCESS_POD_STATE = "Succeeded"
+CEPH_CSI_ALT = "ceph-csi-alt"
 CEPHFS_LS = dict(label_selector="juju.io/manifest=cephfs")
 RBD_LS = dict(label_selector="juju.io/manifest=rbd")
 
 
+def ready_apps(ops_test: OpsTest):
+    """Return a list of apps in the model excluding ceph-csi-alt."""
+    return [a for a in ops_test.model.applications if a != CEPH_CSI_ALT]
+
+
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(ops_test, namespace: str):
+async def test_build_and_deploy(ops_test: OpsTest, namespace: str):
     """Build ceph-csi charm and deploy testing model."""
     charm = next(Path(".").glob("ceph-csi*.charm"), None)
     if not charm:
@@ -41,10 +50,7 @@ async def test_build_and_deploy(ops_test, namespace: str):
     if proxy_settings:
         bundle_vars["https_proxy"] = proxy_settings
 
-    overlays = [
-        ops_test.Bundle("kubernetes-core", channel="stable"),
-        Path("tests/functional/overlay.yaml"),
-    ]
+    overlays = [ops_test.Bundle("kubernetes-core", channel="stable"), TEST_OVERLAY]
 
     bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
 
@@ -82,7 +88,9 @@ async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTes
         v1_core.create_namespace(v1_namespace)
 
     async with ops_test.fast_forward("60s"):
-        await ops_test.model.wait_for_idle(wait_for_active=True, timeout=15 * 60)
+        await ops_test.model.wait_for_idle(
+            apps=ready_apps(ops_test), wait_for_active=True, timeout=30 * 60
+        )
     for unit in ops_test.model.applications["ceph-csi"].units:
         assert unit.workload_status == "active"
         assert unit.workload_status_message == "Ready"
@@ -212,25 +220,25 @@ async def test_host_networking(kube_config: Path, namespace: str, ops_test):
     test_app = ops_test.model.applications["ceph-csi"]
 
     await test_app.set_config({"enable-host-networking": "true"})
-    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network is True
 
     await test_app.set_config({"enable-host-networking": "false"})
-    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network in (None, False)
 
 
-@pytest.fixture()
+@pytest_asyncio.fixture()
 async def cephfs_enabled(ops_test):
     """Fixture which enables/disable cephfs for a single test."""
     test_app = ops_test.model.applications["ceph-csi"]
     await test_app.set_config({"cephfs-enable": "true"})
-    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     yield
     await test_app.set_config({"cephfs-enable": "false"})
-    await ops_test.model.wait_for_idle(status="active", timeout=5 * 60)
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
 
 
 @pytest.mark.usefixtures("cleanup_k8s", "cephfs_enabled")
@@ -244,3 +252,15 @@ async def test_cephfs(kube_config: Path, namespace: str, ops_test):
     assert cephfsplugin.status.ready_replicas == len(k8s_workers.units)
 
     await run_test_storage_class(kube_config, "cephfs")
+
+
+async def test_duplicate_ceph_csi(ops_test: OpsTest):
+    """Test that deploying ceph-csi twice in the same model fails the second."""
+    app = ops_test.model.applications[CEPH_CSI_ALT]
+    expected_msg = "resource collisions (action: list-resources)"
+    try:
+        await app.relate("kubernetes", "kubernetes-control-plane")
+        await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="blocked", timeout=5 * 60)
+        assert expected_msg in app.units[0].workload_status_message
+    finally:
+        await app.destroy_relation("kubernetes", "kubernetes-control-plane:juju-info")
