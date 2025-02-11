@@ -11,6 +11,7 @@ variable "base" {
   description = "Ubuntu bases to deploy the charm onto"
   type        = string
   default     = "ubuntu@22.04"
+  nullable = false
 
   validation {
     condition     = var.base == null || contains(["ubuntu@20.04", "ubuntu@22.04"], var.base)
