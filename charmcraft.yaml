@@ -1,6 +1,26 @@
+# Copyright 2025 Canonical Ltd.
+# See LICENSE file for licensing details.
+# This file configures Charmcraft.
+# See https://juju.is/docs/sdk/charmcraft-config for guidance.
+name: ceph-csi
+title: Ceph CSI
+summary: Subordinate charm for deploying Container Storage Interface (CSI) plugin for Ceph
+description: |
+  This (machine) charm deploys Container Storage Interface (CSI) plugin that
+  enables Charmed Kubernetes (CK) to use ceph as a storage backend.
+links:
+  contact: https://launchpad.net/~containers
+  issues:
+  - https://bugs.launchpad.net/charm-ceph-csi/+bugs
+  source:
+  - https://github.com/charmed-kubernetes/ceph-csi-operator
+
+
 type: charm
+subordinate: true
 parts:
   charm:
+    plugin: charm
     build-packages: [git]
     charm-python-packages:
       - setuptools  # for jinja2
@@ -14,13 +34,285 @@ bases:
     run-on:
     - name: "ubuntu"
       channel: "20.04"
-      architectures: 
+      architectures:
       - amd64
       - s390x
       - arm64
     - name: "ubuntu"
       channel: "22.04"
-      architectures: 
+      architectures:
       - amd64
       - s390x
       - arm64
+    - name: "ubuntu"
+      channel: "24.04"
+      architectures:
+      - amd64
+      - s390x
+      - arm64
+
+config:
+  options:
+    default-storage:
+      default: ceph-xfs
+      description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs', 'cephfs'"
+      type: string
+
+    provisioner-replicas:
+      default: 3
+      description: "Number of replicas of any csi-*plugin-provisioner deployment"
+      type: int
+
+    enable-host-networking:
+      default: false
+      description: "Whether or not csi-*plugin-provisioner deployments use host-networking"
+      type: boolean
+
+    cephfs-storage-class-name-formatter:
+      default: "cephfs"
+      description: |
+        Formatter for the cephfs storage class name
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+          - {name}             - the name of the filesystem
+          - {pool}             - the name of the data-pool
+          - {pool-id}          - the id   of the data-pool
+
+        Example:
+          juju config ceph-csi cephfs-storage-class-name-formatter="{cluster}-{namespace}-{storageclass}"
+
+        The default is to use the storage class name
+      type: string
+
+    cephfs-enable:
+      default: false
+      description: |
+        Whether or not cephfs manifests should be installed
+
+        Only enable if ceph-fs is deployed and related to ceph-mon
+      type: boolean
+
+    cephfs-mounter:
+      default: ""
+      description: |
+        The driver can use either ceph-fuse (fuse) or ceph kernelclient (kernel).
+        If omitted, default volume mounter will be used - this is
+        determined by probing for ceph-fuse and mount.ceph
+      type: string
+
+    cephfs-storage-class-parameters:
+      default: ""
+      description: |
+        Parameters to be used when creating the cephfs storage classes.
+        Changes are only applied to the storage classes if they do not exist.
+
+        Declare additional/replacement parameters in key=value format, separated by spaces.
+        Declare removed parameters in the key- format, separated by spaces.
+
+        Optional parameters can be found in the ceph-csi documentation:
+        https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
+      type: string
+
+    cephfs-tolerations:
+      default: "$csi-cephfsplugin-legacy$"
+      description: |
+        Tolerations to be used when creating the cephfs pods for Daemonsets and Deployments.
+
+        Declare tolerations in key=value,operator,effect format, separating each by spaces.
+
+        Optional tolerations can be found in the kubernetes documentation:
+        https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+        Note:  The default value "$csi-cephfsplugin-legacy$" is a special token
+        which applies a "=,Exists" toleration only to pods associated with
+        csi-cephfsplugin.
+      type: string
+
+    ceph-rbd-tolerations:
+      default: ""
+      description: |
+        Tolerations to be used when creating the rbd pods for Daemonsets and Deployments.
+
+        Declare tolerations in key=value,operator,effect format, separating each by spaces.
+
+        Optional tolerations can be found in the kubernetes documentation:
+        https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+      type: string
+
+    ceph-xfs-storage-class-parameters:
+      default: "imageFeatures=layering"
+      description: |
+        Parameters to be used when creating the ceph-xfs storage class.
+        Changes are only applied to the storage class if it does not exist.
+
+        Declare additional/replacement parameters in key=value format, separated by spaces.
+        Declare removed parameters in the key- format, separated by spaces.
+
+        Optional parameters can be found in the ceph-csi documentation:
+        https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
+      type: string
+
+    ceph-ext4-storage-class-parameters:
+      default: "imageFeatures=layering"
+      description: |
+        Parameters to be used when creating the the ceph-ext4 storage class.
+        Changes are only applied to the storage class if it does not exist.
+
+        Declare additional/replacement parameters in key=value format, separated by spaces.
+        Declare removed parameters in the key- format, separated by spaces.
+
+        Optional parameters can be found in the ceph-csi documentation:
+        https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
+      type: string
+
+    image-registry:
+      type: string
+      default: "rocks.canonical.com/cdk"
+      description: |
+        Image registry for all Ceph CSI container images.
+
+        This value replaces the image registry in image URLs from the release
+        manifests. For example, an image URL like
+        `quay.io/cephcsi/cephcsi:v3.8.0` becomes
+        `rocks.canonical.com/cdk/cephcsi/cephcsi:v3.8.0` if set to
+        `rocks.canonical.com/cdk`.
+
+        Example:
+          juju config ceph-csi image-registry="rocks.canonical.com/cdk"
+
+    metrics-port-cephfsplugin:
+      default: -1
+      description: |
+        Port for csi-cephfsplugin liveness-prometheus metrics
+
+        If set to -1, the metrics service will not be created
+      type: int
+
+    metrics-port-cephfsplugin-provisioner:
+      default: -1
+      description: |
+        Port for csi-cephfsplugin-provisioner liveness-prometheus metrics
+
+        If set to -1, the metrics service will not be created
+      type: int
+
+    metrics-port-rbdplugin:
+      default: -1
+      description: |
+        Port for csi-rbdplugin liveness-prometheus metrics
+
+        If set to -1, the metrics service will not be created
+      type: int
+
+    metrics-port-rbdplugin-provisioner:
+      default: -1
+      description: |
+        Port for csi-rbdplugin-provisioner liveness-prometheus metrics
+
+        If set to -1, the metrics service will not be created
+      type: int
+
+    namespace:
+      type: string
+      default: ""
+      description: |
+        Kubernetes namespace in which to install the rbd and cephfs
+        components including deployments, daemonsets, secrets, configmaps.
+
+        if unspecified, "default" is assumed
+
+        NOTE: Can only be specified on deployment since some
+        attributes of kubernetes resources are non-modifiable.
+        The admin is responsible for creating the namespace.
+
+    release:
+      type: string
+      default: "v3.9.0"
+      description: |
+        Specify the version of ceph-csi as defined by the `release`
+        tags of https://github.com/ceph/ceph-csi
+
+        example)
+          juju config ceph-csi release='v3.7.2'
+
+        A list of supported versions is available through the action:
+          juju run ceph-csi/leader list-versions
+
+        To reset by to the latest supported by the charm use:
+          juju config ceph-csi --reset release
+
+        The current release deployed is available by viewing
+          juju status ceph-csi
+
+actions:
+  list-versions:
+    description: List versions supported by this charm
+  list-resources:
+    description: List Resources of configured version
+    params:
+      manifest:
+        type: string
+        default: ""
+        description: |
+          Filter list based on "cephfs, rbc, or config" manifests.
+      resources:
+        type: string
+        default: ""
+        description: |
+          Space separated list of kubernetes resource types to filter list result
+  scrub-resources:
+    description: Remove deployments other than the current one
+    params:
+      manifest:
+        type: string
+        default: ""
+        description: |
+          Filter list based on "cephfs, rbc, or config" manifests.
+      resources:
+        type: string
+        default: ""
+        description: |
+          Space separated list of kubernetes resource types to filter scrubbing   
+  sync-resources:
+    description: |
+      Add kubernetes resources which should be created by this charm which aren't
+      present within the cluster.
+    params:
+      manifest:
+        type: string
+        default: ""
+        description: |
+          Filter list based on "cephfs, rbc, or config" manifests.
+      resources:
+        type: string
+        default: ""
+        description: |
+          Space separated list of kubernetes resource types
+          to use a filter during the sync. This helps limit
+          which missing resources are applied.
+  delete-storage-class:
+    description: |
+      Delete storage class which may be in conflict with the underlying cluster.
+    params:
+      name:
+        type: string
+        description: Name of a specific storage class to delete.
+        enum:
+          - cephfs
+          - ceph-xfs
+          - cephfs-ext4
+    required:
+    - name
+
+requires:
+  ceph-client:
+    interface: ceph-client
+  kubernetes:
+    interface: juju-info
+    scope: container
+  kubernetes-info:
+    interface: kubernetes-info
+    scope: container
+
