@@ -1,12 +1,12 @@
 import logging
 import pickle
-from abc import ABCMeta, abstractmethod
 from hashlib import md5
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
-from ops.manifests import Addition, Manifests, Patch
+from lightkube.models.core_v1 import Toleration
+from ops.manifests import Manifests, Patch
 
 log = logging.getLogger(__name__)
 
@@ -91,30 +91,59 @@ class ConfigureLivenessPrometheus(Patch):
             yield container
 
 
-class StorageClassAddition(Addition):
-    """Base class for storage class additions."""
+class CephToleration(Toleration):
+    @classmethod
+    def _from_string(cls, toleration_str: str) -> "CephToleration":
+        """Parses a toleration string into a Toleration object.
 
-    __metaclass__ = ABCMeta
+        Raises:
+            ValueError: If the string is not a valid toleration.
+        """
+        # A missing ',' will raise ValueError
+        key_value, operator, *effects = toleration_str.split(",")
+        # A missing '=' will raise ValueError
+        key, value = key_value.split("=", 1)
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Name of the storage class."""
-        raise NotImplementedError
+        if operator not in ["Exists", "Equal"]:
+            raise ValueError(f"Invalid {operator=}")
+        if len(effects) > 1:
+            raise ValueError(f"Too many effects='{','.join(effects)}'")
+        effect = effects[0] if effects else ""
+        if effect not in ["NoSchedule", "PreferNoSchedule", "NoExecute", ""]:
+            raise ValueError(f"Invalid {effect=}")
 
-    def update_parameters(self, parameters: Dict[str, str]) -> None:
-        """Adjust parameters for storage class."""
-        config = f"{self.name}-storage-class-parameters"
-        adjustments = self.manifests.config.get(config)
-        if not adjustments:
-            log.info(f"No adjustments for {self.name} storage-class parameters")
-            return
+        return cls(
+            key=key if key else None,  # Convert empty string to None
+            value=value if value else None,
+            operator=operator,
+            effect=effect if effect else None,
+        )
 
-        for adjustment in adjustments.split(" "):
-            key_value = adjustment.split("=", 1)
-            if len(key_value) == 2:
-                parameters[key_value[0]] = key_value[1]
-            elif adjustment.endswith("-"):
-                parameters.pop(adjustment[:-1], None)
-            else:
-                log.warning("Invalid parameter: %s in %s", adjustment, config)
+    @classmethod
+    def from_space_separated(cls, tolerations: str) -> List["CephToleration"]:
+        """Parses a space separated string of tolerations into a list of Toleration objects.
+
+        Raises:
+            ValueError: If any of the tolerations are invalid
+        """
+        try:
+            return [cls._from_string(toleration) for toleration in tolerations.split()]
+        except ValueError as e:
+            raise ValueError(f"Invalid tolerations: {e}") from e
+
+
+def update_storage_params(ceph_type: str, config: Dict[str, Any], params: Dict[str, str]) -> None:
+    """Adjust parameters for storage class."""
+    cfg_name = f"{ceph_type}-storage-class-parameters"
+    if not (adjustments := config.get(cfg_name)):
+        log.info(f"No adjustments for {ceph_type} storage-class parameters")
+        return
+
+    for adjustment in adjustments.split(" "):
+        key_value = adjustment.split("=", 1)
+        if len(key_value) == 2:
+            params[key_value[0]] = key_value[1]
+        elif adjustment.endswith("-"):
+            params.pop(adjustment[:-1], None)
+        else:
+            log.warning("Invalid parameter: %s in %s", adjustment, cfg_name)

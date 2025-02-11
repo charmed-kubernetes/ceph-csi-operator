@@ -3,7 +3,7 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
@@ -12,9 +12,10 @@ from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Pa
 
 from manifests_base import (
     AdjustNamespace,
+    CephToleration,
     ConfigureLivenessPrometheus,
     SafeManifest,
-    StorageClassAddition,
+    update_storage_params,
 )
 
 if TYPE_CHECKING:
@@ -49,7 +50,7 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(StorageClassAddition):
+class CephStorageClass(Addition):
     """Create ceph storage classes."""
 
     REQUIRED_CONFIG = {"fsid"}
@@ -88,7 +89,7 @@ class CephStorageClass(StorageClassAddition):
             "pool": f"{self.fs_type}-pool",
         }
 
-        self.update_parameters(parameters)
+        update_storage_params(self.name, self.manifests.config, parameters)
 
         return StorageClass.from_dict(
             dict(
@@ -105,8 +106,13 @@ class CephStorageClass(StorageClassAddition):
 class ProvisionerAdjustments(Patch):
     """Update RBD provisioner."""
 
+    def tolerations(self) -> List[CephToleration]:
+        cfg = self.manifests.config.get("ceph-rbd-tolerations") or ""
+        return CephToleration.from_space_separated(cfg)
+
     def __call__(self, obj: AnyResource) -> None:
-        """Use the image-registry config and updates container images in obj."""
+        """Mutates CSI RBD Provisioner Deployment replicas/hostNetwork and DaemonSet kubelet_dir paths."""
+        tolerations = self.tolerations()
         if (
             obj.kind == "Deployment"
             and obj.metadata
@@ -115,12 +121,18 @@ class ProvisionerAdjustments(Patch):
             obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
             log.info(f"Updating deployment replicas to {replica}")
 
+            obj.spec.template.spec.tolerations = tolerations
+            log.info("Updating deployment tolerations")
+
             obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
                 "enable-host-networking"
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
 
         if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-rbdplugin":
+            obj.spec.template.spec.tolerations = tolerations
+            log.info("Updating daemonset tolerations to operator=Exists")
+
             kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
 
             for c in obj.spec.template.spec.containers:
@@ -177,7 +189,6 @@ class RBDManifests(SafeManifest):
     def config(self) -> Dict:
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
-        config["image-registry"] = "rocks.canonical.com:443/cdk"
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.kubernetes_context)
@@ -198,4 +209,13 @@ class RBDManifests(SafeManifest):
             value = self.config.get(prop)
             if not value:
                 return f"RBD manifests require the definition of '{prop}'"
+
+        pa_manipulator = next(
+            m for m in self.manipulations if isinstance(m, ProvisionerAdjustments)
+        )
+        try:
+            pa_manipulator.tolerations()
+        except ValueError as err:
+            return f"Cannot adjust CephRBD Pods: {err}"
+
         return None
