@@ -4,7 +4,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
@@ -174,6 +174,11 @@ class CephStorageClass(Addition):
 
     def __call__(self) -> List[AnyResource]:
         """Craft the storage class object."""
+        if cast(SafeManifest, self.manifests).purgeable:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return [StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))]
         return [self.create(class_param) for class_param in self.parameter_list()]
 
 
