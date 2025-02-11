@@ -14,7 +14,7 @@ variable "base" {
   nullable    = false
 
   validation {
-    condition     = var.base == null || contains(["ubuntu@20.04", "ubuntu@22.04"], var.base)
+    condition     = contains(["ubuntu@20.04", "ubuntu@22.04"], var.base)
     error_message = "Base must be one of ubuntu@20.04, ubuntu@22.04"
   }
 }
