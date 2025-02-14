@@ -602,7 +602,7 @@ def test_prevent_collisions(ceph_context, harness, caplog):
         ResourceAnalysis("rbd", set(), set(), set(), set()),
         ResourceAnalysis("cephfs", set(), set(), set(), set()),
     ]
-    with mock.patch.object(harness.charm.collector, "list_resources") as mock_list_resources:
+    with mock.patch.object(harness.charm.collector, "analyze_resources") as mock_list_resources:
         mock_list_resources.return_value = expected_results
 
         with reconcile_this(harness, lambda e: harness.charm.prevent_collisions(e)):

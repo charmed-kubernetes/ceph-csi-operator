@@ -314,7 +314,7 @@ class CephCsiCharm(ops.CharmBase):
         """Prevent manifest collisions."""
         if self.unit.is_leader():
             self.unit.status = ops.MaintenanceStatus("Detecting manifest collisions")
-            analyses: List[ResourceAnalysis] = self.collector.list_resources(event, "", "")
+            analyses: List[ResourceAnalysis] = self.collector.analyze_resources(event, "", "")
             count = sum(len(a.conflicting) for a in analyses)
             if count > 0:
                 msg = f"{count} Kubernetes resource collision{'s'[:count^1]} (action: list-resources)"
