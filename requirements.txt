@@ -1,5 +1,5 @@
 ops >= 1.2.0
-ops.manifest @ git+https://github.com/canonical/ops-lib-manifest@KU-2644/enhance-list-resources
+ops.manifest == 1.6.0
 jinja2
 pyyaml
 
