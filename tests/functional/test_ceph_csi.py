@@ -108,6 +108,17 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     assert rbdplugin.status.ready_replicas == len(k8s_workers.units)
 
 
+async def test_rbac_name_formatter(kube_config: Path, ops_test):
+    """Test that ceph-csi deployments use the correct rbac name formatter."""
+    config.load_kube_config(str(kube_config))
+    rbac_api = client.RbacAuthorizationV1Api()
+    cluster_roles = rbac_api.list_cluster_role(**RBD_LS).items
+    # Check that the ceph-csi cluster roles are using the correct name formatter
+    assert len(cluster_roles) == 2
+    for role in cluster_roles:
+        assert role.metadata.name.endswith("-ceph-csi")
+
+
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
 @pytest.mark.usefixtures("cleanup_k8s", "ops_test")
 async def test_storage_class(kube_config: Path, storage_class: str):

@@ -167,6 +167,35 @@ config:
         https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
       type: string
 
+    ceph-rbac-name-formatter:
+      default: "{name}"
+      description: |
+        Formatter for colliding kubernetes rbac resources
+
+        The formatter is used to create a unique name for the resource
+        when the name collides with an existing resource.
+        This is useful when deploying multiple ceph-csi charms.
+
+        This is a list of non-namespaced resources affected by this formatter:
+          - ClusterRole/cephfs-csi-nodeplugin
+          - ClusterRoleBinding/cephfs-csi-nodeplugin
+          - ClusterRole/cephfs-external-provisioner-runner
+          - ClusterRoleBinding/cephfs-external-provisioner-runner
+          - ClusterRole/rbd-csi-nodeplugin
+          - ClusterRoleBinding/rbd-csi-nodeplugin
+          - ClusterRole/rbd-external-provisioner-runner
+          - ClusterRoleBinding/rbd-csi-provisioner-role
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}   - the name of the juju application
+          - {name}  - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-rbac-name-formatter="{name}-{app}"
+
+        The default is to use the {name} of the resource
+      type: string
+
     image-registry:
       type: string
       default: "rocks.canonical.com/cdk"

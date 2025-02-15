@@ -15,6 +15,7 @@ from manifests_base import (
     CephToleration,
     ConfigureLivenessPrometheus,
     ManifestLabelExcluder,
+    RbacAdjustments,
     SafeManifest,
     update_storage_params,
 )
@@ -146,17 +147,6 @@ class ProvisionerAdjustments(Patch):
             log.info(f"Updating RBD daemonset kubeletDir to {kubelet_dir}")
 
 
-class RbacAdjustments(Patch):
-    """Update RBD RBAC Attributes."""
-
-    def __call__(self, obj: AnyResource) -> None:
-        ns = self.manifests.config["namespace"]
-        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
-            for each in obj.subjects:
-                if each.kind == "ServiceAccount":
-                    each.namespace = ns
-
-
 class RBDManifests(SafeManifest):
     """Deployment Specific details for the rbd.csi.ceph.com."""
 
@@ -205,7 +195,11 @@ class RBDManifests(SafeManifest):
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
-        props = StorageSecret.REQUIRED_CONFIG.keys() | CephStorageClass.REQUIRED_CONFIG
+        props = (
+            StorageSecret.REQUIRED_CONFIG.keys()
+            | CephStorageClass.REQUIRED_CONFIG
+            | RbacAdjustments.REQUIRED_CONFIG
+        )
         for prop in sorted(props):
             value = self.config.get(prop)
             if not value:

@@ -17,6 +17,7 @@ from manifests_base import (
     CephToleration,
     ConfigureLivenessPrometheus,
     ManifestLabelExcluder,
+    RbacAdjustments,
     SafeManifest,
     update_storage_params,
 )
@@ -253,17 +254,6 @@ class ProvisionerAdjustments(Patch):
             log.info(f"Updating daemonset kubeletDir to {kubelet_dir}")
 
 
-class RbacAdjustments(Patch):
-    """Update RBD RBAC Attributes."""
-
-    def __call__(self, obj: AnyResource) -> None:
-        ns = self.manifests.config["namespace"]
-        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
-            for each in obj.subjects:
-                if each.kind == "ServiceAccount":
-                    each.namespace = ns
-
-
 class RemoveCephFS(Subtraction):
     """Remove all Cephfs resources when disabled."""
 
@@ -327,7 +317,7 @@ class CephFSManifests(SafeManifest):
             log.info("Skipping CephFS evaluation since it's disabled")
             return None
 
-        props = StorageSecret.REQUIRED_CONFIG.keys()
+        props = StorageSecret.REQUIRED_CONFIG.keys() | RbacAdjustments.REQUIRED_CONFIG
         for prop in sorted(props):
             value = self.config.get(prop)
             if not value:

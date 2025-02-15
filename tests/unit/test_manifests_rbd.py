@@ -90,9 +90,15 @@ def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = RBDManifests(charm)
+    assert (
+        manifests.evaluate()
+        == "RBD manifests require the definition of 'ceph-rbac-name-formatter'"
+    )
+    charm.config = {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+
     assert manifests.evaluate() == "RBD manifests require the definition of 'fsid'"
 
-    charm.config = {"user": "cephx", "fsid": "cluster", "kubernetes_key": "123"}
+    charm.config["fsid"] = "cluster"
     assert manifests.evaluate() is None
 
     charm.config["ceph-rbd-tolerations"] = "key=value,Foo"

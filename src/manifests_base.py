@@ -46,6 +46,34 @@ class ManifestLabelExcluder(ManifestLabel):
             obj.metadata.labels.pop(APP_LABEL, None)
 
 
+class RbacAdjustments(Patch):
+    """Update RBAC Attributes."""
+
+    RBAC_NAME_FORMATTER = "ceph-rbac-name-formatter"
+    REQUIRED_CONFIG = {RBAC_NAME_FORMATTER}
+
+    def _rename(self, name: str) -> str:
+        """Rename the object."""
+        formatter = self.manifests.config[self.RBAC_NAME_FORMATTER]
+        return formatter.format(name=name, app=self.manifests.model.app.name)
+
+    def __call__(self, obj: AnyResource) -> None:
+        ns = self.manifests.config["namespace"]
+        if not obj.metadata or not obj.metadata.name:
+            log.error("Object is missing metadata or name. %s", obj)
+            return
+
+        if obj.kind in ["ClusterRole", "ClusterRoleBinding"]:
+            obj.metadata.name = self._rename(obj.metadata.name)
+
+        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
+            for each in obj.subjects:
+                if each.kind == "ServiceAccount":
+                    each.namespace = ns
+            if obj.roleRef.kind == "ClusterRole":
+                obj.roleRef.name = self._rename(obj.roleRef.name)
+
+
 class ConfigureLivenessPrometheus(Patch):
     """Configure liveness probe for Prometheus."""
 

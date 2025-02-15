@@ -170,6 +170,12 @@ def test_manifest_evaluation(caplog):
     assert "Skipping CephFS evaluation since it's disabled" in caplog.text
 
     charm.config = {"cephfs-enable": True}
+    assert (
+        manifests.evaluate()
+        == "CephFS manifests require the definition of 'ceph-rbac-name-formatter'"
+    )
+
+    charm.config["ceph-rbac-name-formatter"] = "{name}"
     assert manifests.evaluate() == "CephFS manifests require the definition of 'kubernetes_key'"
 
     charm.config["kubernetes_key"] = "123"
