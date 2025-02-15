@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 
 class SafeManifest(Manifests):
-    purgeable: bool = False
+    purging: bool = False
 
     def hash(self) -> int:
         """Calculate a hash of the current configuration."""

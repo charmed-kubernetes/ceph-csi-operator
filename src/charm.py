@@ -464,9 +464,9 @@ class CephCsiCharm(ops.CharmBase):
     def _purge_manifest(self, manifest: Manifests) -> None:
         """Purge resources created by this charm by manifest."""
         manifest = cast(SafeManifest, manifest)
-        manifest.purgeable = True
+        manifest.purging = True
         manifest.delete_manifests(ignore_unauthorized=True, ignore_not_found=True)
-        manifest.purgeable = False
+        manifest.purging = False
 
     def _destroying(self, event: ops.EventBase) -> bool:
         """Check if the charm is being destroyed."""
