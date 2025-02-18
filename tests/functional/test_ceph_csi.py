@@ -116,7 +116,7 @@ async def test_rbac_name_formatter(kube_config: Path, ops_test):
     # Check that the ceph-csi cluster roles are using the correct name formatter
     assert len(cluster_roles) == 2
     for role in cluster_roles:
-        assert role.metadata.name.endswith("-ceph-csi")
+        assert role.metadata.name.endswith("-formatter")
 
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])

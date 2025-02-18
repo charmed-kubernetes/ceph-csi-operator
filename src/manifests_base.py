@@ -68,9 +68,14 @@ class RbacAdjustments(Patch):
 
         if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
             for each in obj.subjects:
+                # RoleBinding and ClusterRoleBinding subjects
+                # reference ServiceAccount in a different namespace
+                # so we need to set the namespace to the one we are deploying
                 if each.kind == "ServiceAccount":
                     each.namespace = ns
             if obj.roleRef.kind == "ClusterRole":
+                # ClusterRoleBinding roleRef references a ClusterRole
+                # which is not namespaced and has been renamed
                 obj.roleRef.name = self._rename(obj.roleRef.name)
 
 
