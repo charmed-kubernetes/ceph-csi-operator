@@ -20,7 +20,7 @@ from lightkube import Client, KubeConfig
 from lightkube.core.exceptions import ApiError
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Collector, ManifestClientError
+from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
 
 from manifests_base import Manifests, SafeManifest
 from manifests_cephfs import CephFilesystem, CephFSManifests, CephStorageClass
@@ -84,12 +84,12 @@ class CephCsiCharm(ops.CharmBase):
     def _list_resources(self, event: ops.ActionEvent) -> None:
         manifests = event.params.get("manifest", "")
         resources = event.params.get("resources", "")
-        return self.collector.list_resources(event, manifests, resources)
+        self.collector.list_resources(event, manifests, resources)
 
     def _scrub_resources(self, event: ops.ActionEvent) -> None:
         manifests = event.params.get("manifest", "")
         resources = event.params.get("resources", "")
-        return self.collector.scrub_resources(event, manifests, resources)
+        self.collector.scrub_resources(event, manifests, resources)
 
     def _sync_resources(self, event: ops.ActionEvent) -> None:
         manifests = event.params.get("manifest", "")
@@ -310,6 +310,27 @@ class CephCsiCharm(ops.CharmBase):
             self.unit.status = ops.MaintenanceStatus("Disabling CephFS")
             self._purge_manifest_by_name("cephfs")
 
+    def prevent_collisions(self, event: ops.EventBase) -> None:
+        """Prevent manifest collisions."""
+        if self.unit.is_leader():
+            self.unit.status = ops.MaintenanceStatus("Detecting manifest collisions")
+            analyses: List[ResourceAnalysis] = self.collector.analyze_resources(event, "", "")
+            count = sum(len(a.conflicting) for a in analyses)
+            if count > 0:
+                msg = f"{count} Kubernetes resource collision{'s'[:count^1]} (action: list-resources)"
+                logger.error(msg)
+                for analysis in analyses:
+                    if analysis.conflicting:
+                        logger.error(
+                            " Collision count in '%s' is %d",
+                            analysis.manifest,
+                            len(analysis.conflicting),
+                        )
+                        for _ in sorted(map(str, analysis.conflicting)):
+                            logger.error("   %s", _)
+                status.add(ops.BlockedStatus(msg))
+                raise status.ReconcilerError(msg)
+
     def evaluate_manifests(self) -> int:
         """Evaluate all manifests."""
         self.unit.status = ops.MaintenanceStatus("Evaluating CephCSI")
@@ -351,7 +372,13 @@ class CephCsiCharm(ops.CharmBase):
         :return: `True` if all the data successfully loaded, otherwise `False`
         """
         self.unit.status = ops.MaintenanceStatus("Checking Relations")
-        if not self.model.get_relation(self.CEPH_CLIENT_RELATION):
+        try:
+            relation = self.model.get_relation(self.CEPH_CLIENT_RELATION)
+        except ops.model.TooManyRelatedAppsError:
+            status.add(ops.BlockedStatus("Multiple ceph-client relations"))
+            raise status.ReconcilerError("Multiple ceph-client relations")
+
+        if not relation:
             status.add(ops.BlockedStatus("Missing relation: ceph-client"))
             raise status.ReconcilerError("Missing relation: ceph-client")
 
@@ -379,6 +406,7 @@ class CephCsiCharm(ops.CharmBase):
         self.check_ceph_client()
         self.configure_ceph_cli()
         self.enforce_cephfs_enabled()
+        self.prevent_collisions(event)
         hash = self.evaluate_manifests()
         self.install_manifests(config_hash=hash)
         self._update_status()
@@ -436,9 +464,9 @@ class CephCsiCharm(ops.CharmBase):
     def _purge_manifest(self, manifest: Manifests) -> None:
         """Purge resources created by this charm by manifest."""
         manifest = cast(SafeManifest, manifest)
-        manifest.purgeable = True
+        manifest.purging = True
         manifest.delete_manifests(ignore_unauthorized=True, ignore_not_found=True)
-        manifest.purgeable = False
+        manifest.purging = False
 
     def _destroying(self, event: ops.EventBase) -> bool:
         """Check if the charm is being destroyed."""

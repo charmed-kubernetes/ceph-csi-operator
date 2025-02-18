@@ -101,7 +101,7 @@ def test_ceph_provisioner_adjustment_modelled(caplog):
 def test_ceph_storage_class_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
-    manifest.purgeable = False
+    manifest.purging = False
     csc = CephStorageClass(manifest)
     alt_ns = "diff-ns"
 
@@ -141,10 +141,10 @@ def test_ceph_storage_class_modelled(caplog):
     assert f"Modelling storage class sc='{TEST_CEPH_FS_ALT.name}'" in caplog.text
 
 
-def test_ceph_storage_class_purgeable(caplog):
+def test_ceph_storage_class_purging(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
-    manifest.purgeable = True
+    manifest.purging = True
     csc = CephStorageClass(manifest)
 
     caplog.clear()

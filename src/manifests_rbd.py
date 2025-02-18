@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
+from ops.manifests import Addition, ConfigRegistry, Manifests, Patch
 
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
     ConfigureLivenessPrometheus,
+    ManifestLabelExcluder,
     SafeManifest,
     update_storage_params,
 )
@@ -166,7 +167,7 @@ class RBDManifests(SafeManifest):
             "upstream/rbd",
             [
                 StorageSecret(self),
-                ManifestLabel(self),
+                ManifestLabelExcluder(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
                 CephStorageClass(self, "xfs"),  # creates ceph-xfs

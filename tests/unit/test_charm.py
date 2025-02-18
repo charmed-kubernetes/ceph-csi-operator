@@ -10,13 +10,15 @@ import unittest.mock as mock
 from subprocess import SubprocessError
 
 import charms.operator_libs_linux.v0.apt as apt
+import ops
 import pytest
 from lightkube.core.exceptions import ApiError
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import ManifestClientError
+from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
 
 from charm import CephCsiCharm, CephFilesystem
+from manifests_config import EncryptConfig
 
 
 @pytest.fixture
@@ -161,6 +163,7 @@ def mocked_handlers():
         "configure_ceph_cli",
         "enforce_cephfs_enabled",
         "evaluate_manifests",
+        "prevent_collisions",
         "install_manifests",
         "_update_status",
     ]
@@ -410,22 +413,30 @@ def test_cleanup(_purge_manifest, harness, caplog):
     _purge_manifest.assert_called()
 
 
-@mock.patch("charm.Collector", autospec=True)
-def test_action_list_versions(mock_collector, harness):
-    harness.begin_with_initial_hooks()
-    harness.charm.collector = mock_collector()
-    harness.run_action("list-versions")
-    harness.charm.collector.list_versions.assert_called_once()
+@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
+def test_action_list_versions(harness):
+    harness.begin()
+
+    mock_event = mock.MagicMock(spec=ops.ActionEvent)
+    assert harness.charm._list_versions(mock_event) is None
+    expected_results = {
+        "cephfs-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+        "config-versions": "",
+        "rbd-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+    }
+    mock_event.set_results.assert_called_once_with(expected_results)
 
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
-def test_action_manifest_resources(harness):
-    harness.begin()
+def test_action_manifest_resources(harness, lk_client, api_error_klass):
+    harness.begin_with_initial_hooks()
+    not_found = api_error_klass()
+    not_found.status.code = 404
+    not_found.status.message = "Not Found"
+    lk_client.get.side_effect = not_found
 
-    mock_event = mock.MagicMock()
-    assert harness.charm._list_resources(mock_event) is None
     expected_results = {
         "config-missing": "ConfigMap/default/ceph-csi-encryption-kms-config",
         "rbd-missing": "\n".join(
@@ -448,62 +459,62 @@ def test_action_manifest_resources(harness):
             ]
         ),
     }
-    mock_event.set_results.assert_called_once_with(expected_results)
+    action = harness.run_action("list-resources", {})
+    assert action.results == expected_results
 
-    mock_event.set_results.reset_mock()
-    assert harness.charm._scrub_resources(mock_event) is None
-    mock_event.set_results.assert_called_with(expected_results)
+    action = harness.run_action("scrub-resources", {})
+    assert action.results == expected_results
 
-    mock_event.set_results.reset_mock()
-    assert harness.charm._sync_resources(mock_event) is None
-    mock_event.set_results.assert_called_with(expected_results)
+    action = harness.run_action("sync-resources", {})
+    assert action.results == expected_results
 
 
 @mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 @mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
 @mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
-def test_action_sync_resources_install_failure(harness, lk_client):
-    harness.begin()
+def test_action_sync_resources_install_failure(harness, lk_client, api_error_klass):
+    harness.begin_with_initial_hooks()
+    not_found = api_error_klass()
+    not_found.status.code = 404
+    not_found.status.message = "Not Found"
+    lk_client.get.side_effect = not_found
 
-    mock_event = mock.MagicMock()
-    expected_results = {"result": "Failed to sync missing resources: API Server Unavailable"}
     lk_client.apply.side_effect = ManifestClientError("API Server Unavailable")
-    assert harness.charm._sync_resources(mock_event) is None
-    mock_event.set_results.assert_called_with(expected_results)
+    action = harness.run_action("sync-resources", {})
+
+    lk_client.delete.assert_not_called()
+    assert action.results["result"] == "Failed to sync missing resources: API Server Unavailable"
 
 
 def test_action_delete_storage_class_unknown(harness, lk_client):
     harness.begin_with_initial_hooks()
 
-    mock_event = mock.MagicMock()
-    expected_results = "Invalid storage class name. Must be one of: cephfs, ceph-xfs, ceph-ext4"
     lk_client.delete.side_effect = ManifestClientError("API Server Unavailable")
-    assert harness.charm._delete_storage_class(mock_event) is None
-    mock_event.fail.assert_called_with(expected_results)
+    with pytest.raises(ops.testing.ActionFailed) as exc:
+        harness.run_action("delete-storage-class", {"name": ""})
+
     lk_client.delete.assert_not_called()
+    assert (
+        str(exc.value) == "Invalid storage class name. Must be one of: cephfs, ceph-xfs, ceph-ext4"
+    )
 
 
 def test_action_delete_storage_class_api_error(harness, lk_client):
     harness.begin_with_initial_hooks()
 
-    mock_event = mock.MagicMock()
-    mock_event.params = {"name": "cephfs"}
     lk_client.delete.side_effect = ManifestClientError("API Server Unavailable")
-    assert harness.charm._delete_storage_class(mock_event) is None
+    with pytest.raises(ops.testing.ActionFailed) as exc:
+        harness.run_action("delete-storage-class", {"name": "cephfs"})
     lk_client.delete.assert_called_once_with(StorageClass, name="cephfs")
-    mock_event.fail.assert_called_with("Failed to delete storage class: API Server Unavailable")
+    assert str(exc.value) == "Failed to delete storage class: API Server Unavailable"
 
 
 def test_action_delete_storage_class(harness, lk_client):
     harness.begin_with_initial_hooks()
 
-    mock_event = mock.MagicMock()
-    mock_event.params = {"name": "cephfs"}
-    assert harness.charm._delete_storage_class(mock_event) is None
+    action = harness.run_action("delete-storage-class", {"name": "cephfs"})
+    assert {"result": "Successfully deleted StorageClass/cephfs"} == action.results
     lk_client.delete.assert_called_once_with(StorageClass, name="cephfs")
-    mock_event.set_results.assert_called_with(
-        {"result": "Successfully deleted StorageClass/cephfs"}
-    )
 
 
 @mock.patch("charm.CephCsiCharm.ceph_cli", mock.MagicMock(side_effect=SubprocessError))
@@ -572,6 +583,38 @@ def test_enforce_cephfs_enabled(mock_purge, harness):
         harness.update_config({"cephfs-enable": False})
         mock_purge.assert_not_called()
         assert harness.charm.unit.status.name == "active"
+
+
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_prevent_collisions(ceph_context, harness, caplog):
+    ceph_context.return_value = {}
+    harness.begin()
+
+    config_manifest = harness.charm.collector.manifests["config"]
+    encrypt_config = EncryptConfig(config_manifest)()
+    ManifestLabel(config_manifest)(encrypt_config)
+    encrypt_config.metadata.labels["juju.io/application"] = "ceph-csi-alternate"
+    conflict = HashableResource(encrypt_config)
+    caplog.clear()
+
+    expected_results = [
+        ResourceAnalysis("config", {conflict}, set(), set(), set()),
+        ResourceAnalysis("rbd", set(), set(), set(), set()),
+        ResourceAnalysis("cephfs", set(), set(), set(), set()),
+    ]
+    with mock.patch.object(harness.charm.collector, "analyze_resources") as mock_list_resources:
+        mock_list_resources.return_value = expected_results
+
+        with reconcile_this(harness, lambda e: harness.charm.prevent_collisions(e)):
+            harness.set_leader(True)
+            assert harness.charm.unit.status.name == "blocked"
+            assert (
+                harness.charm.unit.status.message
+                == "1 Kubernetes resource collision (action: list-resources)"
+            )
+    assert "1 Kubernetes resource collision (action: list-resources)" in caplog.messages
+    assert " Collision count in 'config' is 1" in caplog.messages
+    assert "   ConfigMap/ceph-csi-encryption-kms-config" in caplog.messages
 
 
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
