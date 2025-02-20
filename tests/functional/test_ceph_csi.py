@@ -265,7 +265,7 @@ async def test_cephfs(kube_config: Path, namespace: str, ops_test):
     await run_test_storage_class(kube_config, "cephfs")
 
 
-async def test_duplicate_ceph_csi(ops_test: OpsTest):
+async def test_conflicting_ceph_csi(ops_test: OpsTest):
     """Test that deploying ceph-csi twice in the same model fails the second."""
     app = ops_test.model.applications[CEPH_CSI_ALT]
     expected_msg = "resource collisions (action: list-resources)"
@@ -275,3 +275,43 @@ async def test_duplicate_ceph_csi(ops_test: OpsTest):
         assert expected_msg in app.units[0].workload_status_message
     finally:
         await app.destroy_relation("kubernetes", "kubernetes-control-plane:juju-info")
+        await ops_test.model.wait_for_idle(
+            apps=[CEPH_CSI_ALT], wait_for_exact_units=0, timeout=5 * 60
+        )
+
+
+async def test_duplicate_ceph_csi(ops_test: OpsTest, namespace: str, kube_config: Path):
+    """Test that deploying ceph-csi twice in the same model succeeds after removing conflicts."""
+    app = ops_test.model.applications[CEPH_CSI_ALT]
+
+    # Create a new namespace for the second ceph-csi deployment
+    alt_namespace = f"{namespace}-alt"
+    config.load_kube_config(str(kube_config))
+    v1_core = client.CoreV1Api()
+    namespaces = [o.metadata.name for o in v1_core.list_namespace().items]
+    if alt_namespace not in namespaces:
+        v1_namespace = client.V1Namespace(metadata=client.V1ObjectMeta(name=alt_namespace))
+        v1_core.create_namespace(v1_namespace)
+
+    # Prepare to restore config after the test
+    current_config = await app.get_config()
+    await app.set_config(
+        {
+            "namespace": alt_namespace,
+            "cephfs-enable": "true",
+            "ceph-ext4-storage-class-name-formatter": "ceph-ext4-{namespace}",
+            "ceph-xfs-storage-class-name-formatter": "ceph-xfs-{namespace}",
+            "cephfs-storage-class-name-formatter": "cephfs-{namespace}",
+            "ceph-rbac-name-formatter": "{name}-{namespace}",
+        }
+    )
+
+    try:
+        await app.relate("kubernetes", "kubernetes-control-plane")
+        await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="active", timeout=5 * 60)
+    finally:
+        await app.destroy_relation("kubernetes", "kubernetes-control-plane:juju-info")
+        await ops_test.model.wait_for_idle(
+            apps=[CEPH_CSI_ALT], wait_for_exact_units=0, timeout=5 * 60
+        )
+        await app.set_config(current_config)

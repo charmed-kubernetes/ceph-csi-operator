@@ -3,12 +3,12 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, Manifests, Patch
+from ops.manifests import Addition, ConfigRegistry, Patch
 
 from manifests_base import (
     AdjustNamespace,
@@ -17,7 +17,7 @@ from manifests_base import (
     ManifestLabelExcluder,
     RbacAdjustments,
     SafeManifest,
-    update_storage_params,
+    StorageClassFactory,
 )
 
 if TYPE_CHECKING:
@@ -52,46 +52,46 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(Addition):
+class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
     REQUIRED_CONFIG = {"fsid"}
     PROVISIONER = "rbd.csi.ceph.com"
 
-    def __init__(self, manifests: Manifests, fs_type: str):
-        super().__init__(manifests)
-        self.fs_type = fs_type
-
-    @property
-    def name(self) -> str:
-        return f"ceph-{self.fs_type}"
-
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
+        if cast(SafeManifest, self.manifests).purging:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))
+
         clusterID = self.manifests.config.get("fsid")
+        fs_type = self._fs_type.split("-")[1]
         if not clusterID:
-            log.error(f"Ceph {self.fs_type.capitalize()} is missing required storage item: 'fsid'")
+            log.error(f"Ceph {fs_type.capitalize()} is missing required storage item: 'fsid'")
             return None
 
         ns = self.manifests.config["namespace"]
-        metadata: Dict[str, Any] = dict(name=self.name)
-        if self.manifests.config.get("default-storage") == self.name:
+        name = self.name()
+        metadata: Dict[str, Any] = dict(name=name)
+        if self.manifests.config.get("default-storage") == name:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Modelling storage class {metadata['name']}")
+        log.info(f"Modelling storage class {name}")
         parameters = {
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": ns,
-            "csi.storage.k8s.io/fstype": self.fs_type,
+            "csi.storage.k8s.io/fstype": fs_type,
             "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
-            "pool": f"{self.fs_type}-pool",
+            "pool": f"{fs_type}-pool",
         }
 
-        update_storage_params(self.name, self.manifests.config, parameters)
+        self.update_params(parameters)
 
         return StorageClass.from_dict(
             dict(
@@ -108,6 +108,9 @@ class CephStorageClass(Addition):
 class ProvisionerAdjustments(Patch):
     """Update RBD provisioner."""
 
+    PROVISIONER_NAME = "csi-rbdplugin-provisioner"
+    PLUGIN_NAME = "csi-rbdplugin"
+
     def tolerations(self) -> List[CephToleration]:
         cfg = self.manifests.config.get("ceph-rbd-tolerations") or ""
         return CephToleration.from_space_separated(cfg)
@@ -118,7 +121,7 @@ class ProvisionerAdjustments(Patch):
         if (
             obj.kind == "Deployment"
             and obj.metadata
-            and obj.metadata.name == "csi-rbdplugin-provisioner"
+            and obj.metadata.name == self.PROVISIONER_NAME
         ):
             obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
             log.info(f"Updating deployment replicas to {replica}")
@@ -131,7 +134,7 @@ class ProvisionerAdjustments(Patch):
             )
             log.info(f"Updating deployment hostNetwork to {host_network}")
 
-        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-rbdplugin":
+        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == self.PLUGIN_NAME:
             obj.spec.template.spec.tolerations = tolerations
             log.info("Updating daemonset tolerations to operator=Exists")
 
@@ -160,8 +163,8 @@ class RBDManifests(SafeManifest):
                 ManifestLabelExcluder(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
-                CephStorageClass(self, "xfs"),  # creates ceph-xfs
-                CephStorageClass(self, "ext4"),  # creates ceph-ext4
+                CephStorageClass(self, "ceph-xfs"),  # creates ceph-xfs
+                CephStorageClass(self, "ceph-ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
@@ -213,4 +216,10 @@ class RBDManifests(SafeManifest):
         except ValueError as err:
             return f"Cannot adjust CephRBD Pods: {err}"
 
+        for storage_class in self.manipulations:
+            if isinstance(storage_class, CephStorageClass):
+                try:
+                    storage_class.evaluate()
+                except ValueError as err:
+                    return f"RBD manifests failed to create storage classes: {err}"
         return None

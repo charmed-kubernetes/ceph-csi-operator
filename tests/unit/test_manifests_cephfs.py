@@ -166,6 +166,7 @@ def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = CephFSManifests(charm)
+    sc_name_formatter_key = "cephfs-storage-class-name-formatter"
     assert manifests.evaluate() is None
     assert "Skipping CephFS evaluation since it's disabled" in caplog.text
 
@@ -190,16 +191,16 @@ def test_manifest_evaluation(caplog):
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS]
     assert manifests.evaluate() == err_formatter.format(
-        "empty " + CephStorageClass.STORAGE_NAME_FORMATTER
+        "Missing storage class name " + sc_name_formatter_key
     )
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS, TEST_CEPH_FS_ALT]
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = CephStorageClass.STORAGE_NAME
+    charm.config[sc_name_formatter_key] = CephStorageClass.STORAGE_TYPE
     assert manifests.evaluate() == err_formatter.format(
-        CephStorageClass.STORAGE_NAME_FORMATTER + " does not generate unique names"
+        sc_name_formatter_key + " does not generate unique names"
     )
 
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = "cephfs-{name}"
+    charm.config[sc_name_formatter_key] = "cephfs-{name}"
     assert manifests.evaluate() is None
 
     charm.config["cephfs-tolerations"] = "key=value,Foo"

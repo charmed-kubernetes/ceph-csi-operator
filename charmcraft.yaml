@@ -141,6 +141,21 @@ config:
         https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
       type: string
 
+    ceph-xfs-storage-class-name-formatter:
+      default: "ceph-xfs"
+      description: |
+        Formatter for the ceph xfs storage class name
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-xfs-storage-class-name-formatter="{cluster}-{namespace}-{storageclass}"
+
+        The default is to use the storage class name
+      type: string
+
     ceph-xfs-storage-class-parameters:
       default: "imageFeatures=layering"
       description: |
@@ -152,6 +167,21 @@ config:
 
         Optional parameters can be found in the ceph-csi documentation:
         https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
+      type: string
+
+    ceph-ext4-storage-class-name-formatter:
+      default: "ceph-ext4"
+      description: |
+        Formatter for the ceph ext4 storage class name
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-ext4-storage-class-name-formatter="{cluster}-{namespace}-{storageclass}"
+
+        The default is to use the storage class name
       type: string
 
     ceph-ext4-storage-class-parameters:
@@ -187,8 +217,9 @@ config:
           - ClusterRoleBinding/rbd-csi-provisioner-role
 
         The formatter is a string that can contain the following placeholders:
-          - {app}   - the name of the juju application
-          - {name}  - the charm configured namespace
+          - {app}       - the name of the juju application
+          - {name}      - the name of the kubernetes resource
+          - {namespace} - the charm configured namespace
 
         Example:
           juju config ceph-csi ceph-rbac-name-formatter="{name}-{app}"

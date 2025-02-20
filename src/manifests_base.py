@@ -6,7 +6,7 @@ from typing import Any, Dict, Generator, List, Optional
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
-from ops.manifests import ManifestLabel, Manifests, Patch
+from ops.manifests import Addition, ManifestLabel, Manifests, Patch
 from ops.manifests.literals import APP_LABEL
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,12 @@ class RbacAdjustments(Patch):
     def _rename(self, name: str) -> str:
         """Rename the object."""
         formatter = self.manifests.config[self.RBAC_NAME_FORMATTER]
-        return formatter.format(name=name, app=self.manifests.model.app.name)
+        fmt_context = {
+            "name": name,
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+        }
+        return formatter.format(**fmt_context)
 
     def __call__(self, obj: AnyResource) -> None:
         ns = self.manifests.config["namespace"]
@@ -77,6 +82,56 @@ class RbacAdjustments(Patch):
                 # ClusterRoleBinding roleRef references a ClusterRole
                 # which is not namespaced and has been renamed
                 obj.roleRef.name = self._rename(obj.roleRef.name)
+
+
+class StorageClassFactory(Addition):
+    """Create ceph-csi storage classes."""
+
+    def __init__(self, manifests: Manifests, fs_type: str):
+        super().__init__(manifests)
+        self._fs_type = fs_type
+
+    def update_params(self, params: Dict[str, str]) -> None:
+        """Adjust parameters for storage class."""
+        cfg_name = f"{self._fs_type}-storage-class-parameters"
+        if not (adjustments := self.manifests.config.get(cfg_name)):
+            log.info(f"No adjustments for {self._fs_type} storage-class parameters")
+            return
+
+        for adjustment in adjustments.split(" "):
+            key_value = adjustment.split("=", 1)
+            if len(key_value) == 2:
+                params[key_value[0]] = key_value[1]
+            elif adjustment.endswith("-"):
+                params.pop(adjustment[:-1], None)
+            else:
+                log.warning("Invalid parameter: %s in %s", adjustment, cfg_name)
+
+    @property
+    def name_formatter_key(self) -> str:
+        """Storage class name formatter key."""
+        return f"{self._fs_type}-storage-class-name-formatter"
+
+    @property
+    def name_formatter(self) -> str:
+        """Storage class name formatter."""
+        key = self.name_formatter_key
+        return str(self.manifests.config.get(key) or "")
+
+    def name(self, context: Dict[str, Any] = {}) -> str:
+        """Create a storage-class name using the name formatter."""
+        fmt_context = {
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+            **context,
+        }
+        return self.name_formatter.format(**fmt_context)
+
+    def evaluate(self) -> None:
+        """Evaluate the storage class."""
+        if not self.name_formatter:
+            log.error("Missing storage class name %s", self.name_formatter_key)
+            raise ValueError(f"Missing storage class name {self.name_formatter_key}")
 
 
 class ConfigureLivenessPrometheus(Patch):
@@ -174,20 +229,3 @@ class CephToleration(Toleration):
             return [cls._from_string(toleration) for toleration in tolerations.split()]
         except ValueError as e:
             raise ValueError(f"Invalid tolerations: {e}") from e
-
-
-def update_storage_params(ceph_type: str, config: Dict[str, Any], params: Dict[str, str]) -> None:
-    """Adjust parameters for storage class."""
-    cfg_name = f"{ceph_type}-storage-class-parameters"
-    if not (adjustments := config.get(cfg_name)):
-        log.info(f"No adjustments for {ceph_type} storage-class parameters")
-        return
-
-    for adjustment in adjustments.split(" "):
-        key_value = adjustment.split("=", 1)
-        if len(key_value) == 2:
-            params[key_value[0]] = key_value[1]
-        elif adjustment.endswith("-"):
-            params.pop(adjustment[:-1], None)
-        else:
-            log.warning("Invalid parameter: %s in %s", adjustment, cfg_name)
