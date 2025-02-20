@@ -57,11 +57,18 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
         f"ceph-{fs_type}-storage-class-name-formatter": sc_name,
         sc_params: (
             "missing-key- "  # removes the missing-key key
-            "invalid-key "  # skips the invalid-key key
+            "invalid-key "  # errors on the invalid-key key
             "extra-parameter=value"  # adds the extra-parameter key
         ),
     }
+    with pytest.raises(ValueError):
+        csc()
+    assert f"Invalid storage-class-parameter: invalid-key in {sc_params}" in caplog.text
 
+    manifest.config[sc_params] = (
+        "missing-key- "  # removes the missing-key key
+        "extra-parameter=value"  # adds the extra-parameter key
+    )
     expected = StorageClass(
         metadata=ObjectMeta(
             name=sc_name,
@@ -86,7 +93,6 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
     )
     assert csc() == expected
     assert f"Modelling storage class {sc_name}" in caplog.text
-    assert f"Invalid parameter: invalid-key in {sc_params}" in caplog.text
 
 
 @pytest.mark.parametrize("fs_type", ["xfs", "ext4"])

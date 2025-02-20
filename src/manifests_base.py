@@ -91,21 +91,32 @@ class StorageClassFactory(Addition):
         super().__init__(manifests)
         self._fs_type = fs_type
 
-    def update_params(self, params: Dict[str, str]) -> None:
-        """Adjust parameters for storage class."""
-        cfg_name = f"{self._fs_type}-storage-class-parameters"
-        if not (adjustments := self.manifests.config.get(cfg_name)):
-            log.info(f"No adjustments for {self._fs_type} storage-class parameters")
-            return
+    @property
+    def storage_class_parameters_key(self) -> str:
+        """Storage class parameters key."""
+        return f"{self._fs_type}-storage-class-parameters"
 
-        for adjustment in adjustments.split(" "):
+    @property
+    def storage_class_parameters(self) -> Dict[str, Optional[str]]:
+        """Storage class parameters."""
+        params = {}
+        cfg_name = self.storage_class_parameters_key
+        adjustments = self.manifests.config.get(cfg_name)
+        if not adjustments:
+            log.info(f"No adjustments for {self._fs_type} storage-class parameters")
+            return params
+
+        for adjustment in adjustments.split():
             key_value = adjustment.split("=", 1)
             if len(key_value) == 2:
                 params[key_value[0]] = key_value[1]
             elif adjustment.endswith("-"):
-                params.pop(adjustment[:-1], None)
+                params[adjustment[:-1]] = None
             else:
-                log.warning("Invalid parameter: %s in %s", adjustment, cfg_name)
+                log.error("Invalid storage-class-parameter: %s in %s", adjustment, cfg_name)
+                raise ValueError(f"Invalid storage-class-parameter: {adjustment} in {cfg_name}")
+
+        return params
 
     @property
     def name_formatter_key(self) -> str:
@@ -127,11 +138,22 @@ class StorageClassFactory(Addition):
         }
         return self.name_formatter.format(**fmt_context)
 
+    def update_params(self, params: Dict[str, str]) -> None:
+        """Adjust parameters for storage class."""
+        for key, value in self.storage_class_parameters.items():
+            if value is None:
+                params.pop(key, None)
+            else:
+                params[key] = value
+
     def evaluate(self) -> None:
         """Evaluate the storage class."""
         if not self.name_formatter:
             log.error("Missing storage class name %s", self.name_formatter_key)
             raise ValueError(f"Missing storage class name {self.name_formatter_key}")
+
+        if not self.storage_class_parameters:
+            log.warning("No storage class parameters for %s", self._fs_type)
 
 
 class ConfigureLivenessPrometheus(Patch):

@@ -3,7 +3,7 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Dict, List, Optional, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
@@ -73,12 +73,11 @@ class CephStorageClass(StorageClassFactory):
             return None
 
         ns = self.manifests.config["namespace"]
-        name = self.name()
-        metadata: Dict[str, Any] = dict(name=name)
-        if self.manifests.config.get("default-storage") == name:
+        metadata: Dict = {"name": self.name()}
+        if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
-        log.info(f"Modelling storage class {name}")
+        log.info(f"Modelling storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,

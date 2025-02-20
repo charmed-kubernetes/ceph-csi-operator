@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, Manifests, Patch
+from ops.manifests import Addition, ConfigRegistry, Patch
 from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
+STORAGE_TYPE = "cephfs"
 
 
 @dataclass
@@ -83,13 +84,9 @@ class StorageSecret(Addition):
 class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
-    STORAGE_TYPE = "cephfs"
     FILESYSTEM_LISTING = "fs_list"
     REQUIRED_CONFIG = {"fsid", FILESYSTEM_LISTING}
     PROVISIONER = "cephfs.csi.ceph.com"
-
-    def __init__(self, manifests: Manifests):
-        super().__init__(manifests, self.STORAGE_TYPE)
 
     def create(self, param: CephStorageClassParameters) -> AnyResource:
         """Create a storage class object."""
@@ -264,7 +261,7 @@ class CephFSManifests(SafeManifest):
 
     def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
-            "cephfs",
+            STORAGE_TYPE,
             charm.model,
             "upstream/cephfs",
             [
@@ -272,7 +269,7 @@ class CephFSManifests(SafeManifest):
                 ManifestLabelExcluder(self),
                 ConfigRegistry(self),
                 ProvisionerAdjustments(self),
-                CephStorageClass(self),
+                CephStorageClass(self, STORAGE_TYPE),
                 RbacAdjustments(self),
                 RemoveCephFS(self),
                 AdjustNamespace(self),
