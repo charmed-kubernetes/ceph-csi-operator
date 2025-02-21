@@ -189,11 +189,10 @@ class CephStorageClass(Addition):
             # which will look up all storage classes installed by this app/manifest
             return [StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))]
 
-        empty = []
         if not self.manifests.config.get("enabled"):
             # If cephfs is not enabled, we cannot add any storage classes
             log.info("Skipping CephFS storage class creation since it's disabled")
-            return empty
+            return []
 
         try:
             parameter_list = self.parameter_list()
@@ -201,7 +200,7 @@ class CephStorageClass(Addition):
             # If we cannot generate the parameter list, we cannot add
             # any storage classes
             log.error("Failed to list storage classes to add: %s", err)
-            return empty
+            return []
 
         return [self.create(class_param) for class_param in parameter_list]
 
