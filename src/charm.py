@@ -406,8 +406,8 @@ class CephCsiCharm(ops.CharmBase):
         self.check_ceph_client()
         self.configure_ceph_cli()
         self.enforce_cephfs_enabled()
-        self.prevent_collisions(event)
         hash = self.evaluate_manifests()
+        self.prevent_collisions(event)
         self.install_manifests(config_hash=hash)
         self._update_status()
 

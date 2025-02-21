@@ -125,15 +125,22 @@ class CephStorageClass(Addition):
         )
 
     def parameter_list(self) -> List[CephStorageClassParameters]:
-        """Accumulate names and settings of the storage classes."""
-        enabled = self.manifests.config.get("enabled")
+        """Accumulate names and settings of the storage classes.
+
+        This can be a difficult problem to resolve the actual names
+        of the storage classes this method creates when not all the data
+        is available from the ceph cluster.
+
+        For example, the fs_data not being available from the cluster
+        means we cannot determine the data pools and cannot format a
+        name for the storage class for that pool.
+
+        In some event we cannot generate the parameter_list, this method
+        will raise a ValueError exception indicated the value missing.
+        """
         fsid = self.manifests.config.get("fsid")
         fs_data: List[CephFilesystem] = self.manifests.config.get(self.FILESYSTEM_LISTING) or []
         formatter = str(self.manifests.config.get(self.STORAGE_NAME_FORMATTER) or "")
-
-        if not enabled:
-            log.info("Ignore CephFS Storage Class")
-            return []
 
         if not fsid:
             log.error("CephFS is missing a filesystem: 'fsid'")
@@ -174,13 +181,28 @@ class CephStorageClass(Addition):
         return sc_names
 
     def __call__(self) -> List[AnyResource]:
-        """Craft the storage class object."""
+        """Craft the storage class objects."""
+
         if cast(SafeManifest, self.manifests).purging:
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
             return [StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))]
-        return [self.create(class_param) for class_param in self.parameter_list()]
+
+        if not self.manifests.config.get("enabled"):
+            # If cephfs is not enabled, we cannot add any storage classes
+            log.info("Skipping CephFS storage class creation since it's disabled")
+            return []
+
+        try:
+            parameter_list = self.parameter_list()
+        except ValueError as err:
+            # If we cannot generate the parameter list, we cannot add
+            # any storage classes
+            log.error("Failed to list storage classes to add: %s", err)
+            return []
+
+        return [self.create(class_param) for class_param in parameter_list]
 
 
 class ProvisionerAdjustments(Patch):
@@ -296,7 +318,7 @@ class CephFSManifests(SafeManifest):
 
         config["namespace"] = self.charm.stored.namespace
         config["release"] = config.pop("release", None)
-        config["enabled"] = self.purging or config.get("cephfs-enable", None)
+        config["enabled"] = config.get("cephfs-enable", None)
         return config
 
     def evaluate(self) -> Optional[str]:

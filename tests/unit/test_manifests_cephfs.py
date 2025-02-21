@@ -106,8 +106,6 @@ def test_ceph_storage_class_modelled(caplog):
     alt_ns = "diff-ns"
 
     manifest.config = {
-        "enabled": True,
-        "fsid": "abcd",
         "fs_list": [TEST_CEPH_FS_ALT],
         "namespace": alt_ns,
         "default-storage": TEST_CEPH_FS_ALT.name,
@@ -115,6 +113,15 @@ def test_ceph_storage_class_modelled(caplog):
         "cephfs-storage-class-name-formatter": "{name}",
     }
 
+    assert csc() == []
+    assert "Skipping CephFS storage class creation since it's disabled" in caplog.text
+
+    manifest.config["enabled"] = True
+    caplog.clear()
+    assert csc() == []
+    assert "CephFS is missing a filesystem: 'fsid'" in caplog.text
+
+    manifest.config["fsid"] = "abcd"
     caplog.clear()
     expected = StorageClass(
         metadata=ObjectMeta(
