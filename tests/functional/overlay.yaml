@@ -38,6 +38,7 @@ applications:
     options:
       provisioner-replicas: 1
       namespace: {{ namespace }}
+      ceph-rbac-name-formatter: '{name}-formatter'
   ceph-csi-alt:
     # This is an alternative ceph-csi charm that is used to test
     # the ability to deploy multiple ceph-csi charms in the same
@@ -46,6 +47,10 @@ applications:
     options:
       provisioner-replicas: 1
       namespace: {{ namespace }}
+      # Intentionally matches the other ceph-csi charm's name
+      # in order to create a conflict and test the ability to
+      # detect the conflict.
+      ceph-rbac-name-formatter: '{name}-formatter'
 relations:
 - [ceph-osd,     ceph-mon]
 - [ceph-fs,      ceph-mon]
