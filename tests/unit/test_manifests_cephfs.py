@@ -9,6 +9,7 @@ from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 
 from manifests_cephfs import (
+    STORAGE_TYPE,
     CephFilesystem,
     CephFSManifests,
     CephStorageClass,
@@ -102,7 +103,7 @@ def test_ceph_storage_class_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     manifest.purging = False
-    csc = CephStorageClass(manifest)
+    csc = CephStorageClass(manifest, STORAGE_TYPE)
     alt_ns = "diff-ns"
 
     manifest.config = {
@@ -152,7 +153,7 @@ def test_ceph_storage_class_purging(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     manifest.purging = True
-    csc = CephStorageClass(manifest)
+    csc = CephStorageClass(manifest, STORAGE_TYPE)
 
     caplog.clear()
     expected = StorageClass(
@@ -166,10 +167,17 @@ def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = CephFSManifests(charm)
+    sc_name_formatter_key = "cephfs-storage-class-name-formatter"
     assert manifests.evaluate() is None
     assert "Skipping CephFS evaluation since it's disabled" in caplog.text
 
     charm.config = {"cephfs-enable": True}
+    assert (
+        manifests.evaluate()
+        == "CephFS manifests require the definition of 'ceph-rbac-name-formatter'"
+    )
+
+    charm.config["ceph-rbac-name-formatter"] = "{name}"
     assert manifests.evaluate() == "CephFS manifests require the definition of 'kubernetes_key'"
 
     charm.config["kubernetes_key"] = "123"
@@ -184,16 +192,16 @@ def test_manifest_evaluation(caplog):
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS]
     assert manifests.evaluate() == err_formatter.format(
-        "empty " + CephStorageClass.STORAGE_NAME_FORMATTER
+        "Missing storage class name " + sc_name_formatter_key
     )
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS, TEST_CEPH_FS_ALT]
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = CephStorageClass.STORAGE_NAME
+    charm.config[sc_name_formatter_key] = STORAGE_TYPE
     assert manifests.evaluate() == err_formatter.format(
-        CephStorageClass.STORAGE_NAME_FORMATTER + " does not generate unique names"
+        sc_name_formatter_key + " does not generate unique names"
     )
 
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = "cephfs-{name}"
+    charm.config[sc_name_formatter_key] = "cephfs-{name}"
     assert manifests.evaluate() is None
 
     charm.config["cephfs-tolerations"] = "key=value,Foo"

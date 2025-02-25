@@ -39,29 +39,39 @@ def test_storage_secret_modelled(caplog):
 def test_ceph_storage_class_modelled(caplog, fs_type):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
+    manifest.purging = False
     manifest.config = {}
-    csc = CephStorageClass(manifest, fs_type)
+    csc = CephStorageClass(manifest, f"ceph-{fs_type}")
 
     assert csc() is None
     assert f"Ceph {fs_type.capitalize()} is missing required storage item: 'fsid'" in caplog.text
 
     caplog.clear()
+    sc_name = f"ceph-{fs_type}"
     alt_ns = "diff-ns"
     sc_params = f"ceph-{fs_type}-storage-class-parameters"
     manifest.config = {
         "fsid": "abcd",
         "namespace": alt_ns,
         "default-storage": f"ceph-{fs_type}",
+        f"ceph-{fs_type}-storage-class-name-formatter": sc_name,
         sc_params: (
             "missing-key- "  # removes the missing-key key
-            "invalid-key "  # skips the invalid-key key
+            "invalid-key "  # errors on the invalid-key key
             "extra-parameter=value"  # adds the extra-parameter key
         ),
     }
+    with pytest.raises(ValueError):
+        csc()
+    assert f"Invalid storage-class-parameter: invalid-key in {sc_params}" in caplog.text
 
+    manifest.config[sc_params] = (
+        "missing-key- "  # removes the missing-key key
+        "extra-parameter=value"  # adds the extra-parameter key
+    )
     expected = StorageClass(
         metadata=ObjectMeta(
-            name=csc.name,
+            name=sc_name,
             annotations={"storageclass.kubernetes.io/is-default-class": "true"},
         ),
         provisioner=CephStorageClass.PROVISIONER,
@@ -69,12 +79,12 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
             "clusterID": "abcd",
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": alt_ns,
-            "csi.storage.k8s.io/fstype": csc.fs_type,
+            "csi.storage.k8s.io/fstype": fs_type,
             "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
-            "pool": f"{csc.fs_type}-pool",
+            "pool": f"{fs_type}-pool",
             "extra-parameter": "value",
         },
         allowVolumeExpansion=True,
@@ -82,17 +92,45 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
         reclaimPolicy="Delete",
     )
     assert csc() == expected
-    assert f"Modelling storage class {csc.name}" in caplog.text
-    assert f"Invalid parameter: invalid-key in {sc_params}" in caplog.text
+    assert f"Modelling storage class {sc_name}" in caplog.text
+
+
+@pytest.mark.parametrize("fs_type", ["xfs", "ext4"])
+def test_ceph_storage_class_purging(caplog, fs_type):
+    caplog.set_level(logging.INFO)
+    manifest = mock.MagicMock()
+    manifest.purging = True
+    csc = CephStorageClass(manifest, f"ceph-{fs_type}")
+
+    caplog.clear()
+    expected = StorageClass(
+        metadata=ObjectMeta(),
+        provisioner=CephStorageClass.PROVISIONER,
+    )
+    assert csc() == expected
 
 
 def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = RBDManifests(charm)
+    assert (
+        manifests.evaluate()
+        == "RBD manifests require the definition of 'ceph-rbac-name-formatter'"
+    )
+    charm.config = {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+
     assert manifests.evaluate() == "RBD manifests require the definition of 'fsid'"
 
-    charm.config = {"user": "cephx", "fsid": "cluster", "kubernetes_key": "123"}
+    charm.config["fsid"] = "cluster"
+    err_formatter = "RBD manifests failed to create storage classes: Missing storage class name {}"
+
+    assert manifests.evaluate() == err_formatter.format("ceph-xfs-storage-class-name-formatter")
+
+    charm.config["ceph-xfs-storage-class-name-formatter"] = "ceph-xfs"
+    assert manifests.evaluate() == err_formatter.format("ceph-ext4-storage-class-name-formatter")
+
+    charm.config["ceph-ext4-storage-class-name-formatter"] = "ceph-ext4"
     assert manifests.evaluate() is None
 
     charm.config["ceph-rbd-tolerations"] = "key=value,Foo"
