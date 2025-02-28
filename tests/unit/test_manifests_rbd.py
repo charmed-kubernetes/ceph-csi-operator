@@ -6,6 +6,7 @@ from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 
+from manifests_base import CSIDriverAdjustments
 from manifests_rbd import CephStorageClass, RBDManifests, StorageSecret
 
 
@@ -38,9 +39,14 @@ def test_storage_secret_modelled(caplog):
 @pytest.mark.parametrize("fs_type", ["xfs", "ext4"])
 def test_ceph_storage_class_modelled(caplog, fs_type):
     caplog.set_level(logging.INFO)
+    alt_ns = "diff-ns"
     manifest = mock.MagicMock()
+    manifest.csidriver = CSIDriverAdjustments(manifest, RBDManifests.DRIVER_NAME)
     manifest.purging = False
-    manifest.config = {}
+    manifest.config = {
+        "csidriver-name-formatter": "{name}",
+        "namespace": alt_ns,
+    }
     csc = CephStorageClass(manifest, f"ceph-{fs_type}")
 
     assert csc() is None
@@ -48,19 +54,19 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
 
     caplog.clear()
     sc_name = f"ceph-{fs_type}"
-    alt_ns = "diff-ns"
     sc_params = f"ceph-{fs_type}-storage-class-parameters"
-    manifest.config = {
-        "fsid": "abcd",
-        "namespace": alt_ns,
-        "default-storage": f"ceph-{fs_type}",
-        f"ceph-{fs_type}-storage-class-name-formatter": sc_name,
-        sc_params: (
-            "missing-key- "  # removes the missing-key key
-            "invalid-key "  # errors on the invalid-key key
-            "extra-parameter=value"  # adds the extra-parameter key
-        ),
-    }
+    manifest.config.update(
+        {
+            "fsid": "abcd",
+            "default-storage": f"ceph-{fs_type}",
+            f"ceph-{fs_type}-storage-class-name-formatter": sc_name,
+            sc_params: (
+                "missing-key- "  # removes the missing-key key
+                "invalid-key "  # errors on the invalid-key key
+                "extra-parameter=value"  # adds the extra-parameter key
+            ),
+        }
+    )
     with pytest.raises(ValueError):
         csc()
     assert f"Invalid storage-class-parameter: invalid-key in {sc_params}" in caplog.text
@@ -74,7 +80,7 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
             name=sc_name,
             annotations={"storageclass.kubernetes.io/is-default-class": "true"},
         ),
-        provisioner=CephStorageClass.PROVISIONER,
+        provisioner=RBDManifests.DRIVER_NAME,
         parameters={
             "clusterID": "abcd",
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
@@ -99,13 +105,18 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
 def test_ceph_storage_class_purging(caplog, fs_type):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
+    manifest.csidriver = CSIDriverAdjustments(manifest, RBDManifests.DRIVER_NAME)
     manifest.purging = True
+    manifest.config = {
+        "csidriver-name-formatter": "{name}",
+        "namespace": "purge-ns",
+    }
     csc = CephStorageClass(manifest, f"ceph-{fs_type}")
 
     caplog.clear()
     expected = StorageClass(
         metadata=ObjectMeta(),
-        provisioner=CephStorageClass.PROVISIONER,
+        provisioner=RBDManifests.DRIVER_NAME,
     )
     assert csc() == expected
 

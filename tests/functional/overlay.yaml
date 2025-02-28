@@ -1,33 +1,36 @@
 description: Overlay for attaching current charm
+series: jammy
 applications:
   {% if https_proxy %}
   containerd:
     options:
       https_proxy: {{ https_proxy }}
   {% endif %}
-  kubernetes-control-plane:
+  k8s:
+    num_units: 1
     expose: true
-    options:
-      allow-privileged: "true"
-  kubernetes-worker:
+  k8s-worker:
+    num_units: 1
     expose: true
+
+  # Primary Ceph Cluster
   ceph-fs:
     charm: ceph-fs
     channel: "quincy/stable"
     num_units: 1
-    constraints: "cores=2 mem=4G root-disk=16G"
+    constraints: "cores=2 mem=4G root-disk=4G"
   ceph-mon:
     charm: ceph-mon
     channel: "quincy/stable"
     num_units: 1
-    constraints: "cores=2 mem=4G root-disk=16G"
+    constraints: "cores=2 mem=4G root-disk=4G"
     options:
       monitor-count: '1'
   ceph-osd:
     charm: ceph-osd
     channel: "quincy/stable"
     num_units: 2
-    constraints: "cores=2 mem=4G root-disk=16G"
+    constraints: "cores=2 mem=4G root-disk=4G"
     options:
       osd-devices: /srv/osd
     storage:
@@ -39,6 +42,30 @@ applications:
       provisioner-replicas: 1
       namespace: {{ namespace }}
       ceph-rbac-name-formatter: '{name}-formatter'
+
+  # Secondary Ceph Cluster
+  ceph-fs-alt:
+    charm: ceph-fs
+    channel: "quincy/stable"
+    num_units: 1
+    constraints: "cores=2 mem=4G root-disk=4G"
+  ceph-mon-alt:
+    charm: ceph-mon
+    channel: "quincy/stable"
+    num_units: 1
+    constraints: "cores=2 mem=4G root-disk=4G"
+    options:
+      monitor-count: '1'
+  ceph-osd-alt:
+    charm: ceph-osd
+    channel: "quincy/stable"
+    num_units: 2
+    constraints: "cores=2 mem=4G root-disk=4G"
+    options:
+      osd-devices: /srv/osd
+    storage:
+      osd-devices: 1G,2
+      osd-journals: 1G,1
   ceph-csi-alt:
     # This is an alternative ceph-csi charm that is used to test
     # the ability to deploy multiple ceph-csi charms in the same
@@ -47,6 +74,7 @@ applications:
     options:
       provisioner-replicas: 1
       namespace: {{ namespace }}
+      csidriver-name-formatter: '{name}.alt'
       # Intentionally matches the other ceph-csi charm's name
       # in order to create a conflict and test the ability to
       # detect the conflict.
@@ -55,5 +83,9 @@ relations:
 - [ceph-osd,     ceph-mon]
 - [ceph-fs,      ceph-mon]
 - [ceph-csi,     ceph-mon:client]
-- [ceph-csi-alt, ceph-mon:client]
-- [ceph-csi,     kubernetes-control-plane]
+
+- [ceph-osd-alt, ceph-mon-alt]
+- [ceph-fs-alt,  ceph-mon-alt]
+- [ceph-csi-alt, ceph-mon-alt:client]
+
+- [ceph-csi:kubernetes-info,     k8s]

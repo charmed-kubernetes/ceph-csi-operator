@@ -9,14 +9,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, Patch
+from ops.manifests import Addition, ConfigRegistry
 from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
     ConfigureLivenessPrometheus,
-    ManifestLabelExcluder,
+    CSIDriverAdjustments,
+    ProvisionerAdjustments,
     RbacAdjustments,
     SafeManifest,
     StorageClassFactory,
@@ -86,10 +87,10 @@ class CephStorageClass(StorageClassFactory):
 
     FILESYSTEM_LISTING = "fs_list"
     REQUIRED_CONFIG = {"fsid", FILESYSTEM_LISTING}
-    PROVISIONER = "cephfs.csi.ceph.com"
 
     def create(self, param: CephStorageClassParameters) -> AnyResource:
         """Create a storage class object."""
+        driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
         ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=param.storage_class_name)
@@ -117,7 +118,7 @@ class CephStorageClass(StorageClassFactory):
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
-                provisioner=self.PROVISIONER,
+                provisioner=driver_name,
                 allowVolumeExpansion=True,
                 reclaimPolicy="Delete",
                 parameters=parameters,
@@ -177,12 +178,13 @@ class CephStorageClass(StorageClassFactory):
 
     def __call__(self) -> List[AnyResource]:
         """Craft the storage class objects."""
+        driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
         if cast(SafeManifest, self.manifests).purging:
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return [StorageClass.from_dict(dict(metadata={}, provisioner=self.PROVISIONER))]
+            return [StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))]
 
         if not self.manifests.config.get("enabled"):
             # If cephfs is not enabled, we cannot add any storage classes
@@ -200,7 +202,7 @@ class CephStorageClass(StorageClassFactory):
         return [self.create(class_param) for class_param in parameter_list]
 
 
-class ProvisionerAdjustments(Patch):
+class FSProvAdjustments(ProvisionerAdjustments):
     """Update Cephfs provisioner."""
 
     PROVISIONER_NAME = "csi-cephfsplugin-provisioner"
@@ -212,41 +214,6 @@ class ProvisionerAdjustments(Patch):
             return [], True
         return CephToleration.from_space_separated(cfg), False
 
-    def __call__(self, obj: AnyResource) -> None:
-        """Use the provisioner-replicas and enable-host-networking to update obj."""
-        tolerations, legacy = self.tolerations()
-        if (
-            obj.kind == "Deployment"
-            and obj.metadata
-            and obj.metadata.name == self.PROVISIONER_NAME
-        ):
-            obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
-            log.info(f"Updating deployment replicas to {replica}")
-
-            obj.spec.template.spec.tolerations = tolerations
-            log.info("Updating deployment tolerations")
-
-            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
-                "enable-host-networking"
-            )
-            log.info(f"Updating deployment hostNetwork to {host_network}")
-        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == self.PLUGIN_NAME:
-            obj.spec.template.spec.tolerations = (
-                tolerations if not legacy else [CephToleration(operator="Exists")]
-            )
-            log.info("Updating daemonset tolerations")
-
-            kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
-
-            for c in obj.spec.template.spec.containers:
-                c.args = [arg.replace("/var/lib/kubelet", kubelet_dir) for arg in c.args]
-                for m in c.volumeMounts:
-                    m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
-            for v in obj.spec.template.spec.volumes:
-                if v.hostPath:
-                    v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
-            log.info(f"Updating daemonset kubeletDir to {kubelet_dir}")
-
 
 class RemoveCephFS(Subtraction):
     """Remove all Cephfs resources when disabled."""
@@ -257,7 +224,9 @@ class RemoveCephFS(Subtraction):
 
 
 class CephFSManifests(SafeManifest):
-    """Deployment Specific details for the aws-ebs-csi-driver."""
+    """Deployment Specific details for the cephfs.csi.ceph.com driver."""
+
+    DRIVER_NAME = "cephfs.csi.ceph.com"
 
     def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
@@ -266,10 +235,10 @@ class CephFSManifests(SafeManifest):
             "upstream/cephfs",
             [
                 StorageSecret(self),
-                ManifestLabelExcluder(self),
                 ConfigRegistry(self),
-                ProvisionerAdjustments(self),
+                FSProvAdjustments(self),
                 CephStorageClass(self, STORAGE_TYPE),
+                CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
                 RemoveCephFS(self),
                 AdjustNamespace(self),
@@ -300,9 +269,10 @@ class CephFSManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
-        config["namespace"] = self.charm.stored.namespace
         config["release"] = config.pop("release", None)
         config["enabled"] = config.get("cephfs-enable", None)
+        config["namespace"] = self.charm.stored.namespace
+        config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
     def evaluate(self) -> Optional[str]:
