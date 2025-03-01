@@ -9,7 +9,8 @@ applications:
   k8s:
     num_units: 1
     expose: true
-    local-storage-enabled: false
+    options:
+      local-storage-enabled: false
   k8s-worker:
     num_units: 1
     expose: true
@@ -43,6 +44,7 @@ applications:
       provisioner-replicas: 1
       namespace: {{ namespace }}
       ceph-rbac-name-formatter: '{name}-formatter'
+      release: {{ release }}
 
   # Secondary Ceph Cluster
   ceph-fs-alt:
@@ -73,9 +75,10 @@ applications:
     # model.  It's used in test_duplicate_ceph_csi
     charm: {{ charm }}
     options:
+      release: {{ release }}
       provisioner-replicas: 1
       namespace: {{ namespace }}
-      csidriver-name-formatter: '{name}.alt'
+      csidriver-name-formatter: 'alt.{name}'
       # Intentionally matches the other ceph-csi charm's name
       # in order to create a conflict and test the ability to
       # detect the conflict.

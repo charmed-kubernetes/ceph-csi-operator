@@ -81,13 +81,13 @@ config:
           - {namespace}        - the charm configured namespace
 
         Example:
-          juju config ceph-csi csidriver-name-formatter="{name}.{app}"
+          juju config ceph-csi csidriver-name-formatter="{app}.{name}"
 
         The default is to use the built-in storage classname
 
         NOTE: Can only be specified on deployment since some
-        attributes of kubernetes resources are non-modifiable.
-        The admin is responsible for creating the namespace.
+        attributes of kubernetes resources cannot be modified
+        once installed.
       type: string
 
     cephfs-storage-class-name-formatter:

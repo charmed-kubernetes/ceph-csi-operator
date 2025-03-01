@@ -18,6 +18,7 @@ from utils import render_j2_template, wait_for_pod
 
 logger = logging.getLogger(__name__)
 
+LATEST_RELEASE = ""  # ops.manifest will load the latest release when unspecified
 TEST_PATH = Path(__file__).parent
 TEMPLATE_DIR = TEST_PATH / "templates"
 TEST_OVERLAY = TEST_PATH / "overlay.yaml"
@@ -45,7 +46,11 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str):
         logger.info("Building ceph-csi charm.")
         charm = await ops_test.build_charm(".")
 
-    bundle_vars = {"charm": charm.resolve(), "namespace": namespace}
+    bundle_vars = {
+        "charm": charm.resolve(),
+        "namespace": namespace,
+        "release": environ.get("TEST_RELEASE", LATEST_RELEASE),
+    }
     proxy_settings = environ.get("TEST_HTTPS_PROXY")
     if proxy_settings:
         bundle_vars["https_proxy"] = proxy_settings
