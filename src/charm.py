@@ -71,6 +71,7 @@ class CephCsiCharm(ops.CharmBase):
         self.stored.set_default(config_hash=0)  # hashed value of the provider config once valid
         self.stored.set_default(destroying=False)  # True when the charm is being shutdown
         self.stored.set_default(namespace=self._configured_ns)
+        self.stored.set_default(drivername=self._configured_drivername)
 
         self.collector = Collector(
             ConfigManifests(self),
@@ -127,6 +128,10 @@ class CephCsiCharm(ops.CharmBase):
             raise status.ReconcilerError("Waiting for deployment")
         elif self.stored.namespace != self._configured_ns:
             status.add(ops.BlockedStatus("Namespace cannot be changed after deployment"))
+        elif self.stored.drivername != self._configured_drivername:
+            status.add(
+                ops.BlockedStatus("csidriver-name-formatter cannot be changed after deployment")
+            )
         else:
             self.unit.set_workload_version(self.collector.short_version)
             if self.unit.is_leader():
@@ -145,6 +150,11 @@ class CephCsiCharm(ops.CharmBase):
     def _configured_ns(self) -> str:
         """Currently configured namespace."""
         return str(self.config.get("namespace") or self.DEFAULT_NAMESPACE)
+
+    @property
+    def _configured_drivername(self) -> str:
+        """Currently configured csi drivername."""
+        return str(self.config.get("csidriver-name-formatter") or "{name}")
 
     @property
     def ceph_data(self) -> Dict[str, Any]:
