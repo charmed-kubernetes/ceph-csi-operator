@@ -9,6 +9,7 @@ applications:
   k8s:
     num_units: 1
     expose: true
+    local-storage-enabled: false
   k8s-worker:
     num_units: 1
     expose: true
