@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry
+from ops.manifests import Addition, ConfigRegistry, ManifestLabel
 
 from manifests_base import (
     AdjustNamespace,
@@ -134,8 +134,8 @@ class RBDManifests(SafeManifest):
                 CephStorageClass(self, "ceph-xfs"),  # creates ceph-xfs
                 CephStorageClass(self, "ceph-ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
-                AdjustNamespace(self),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
+                AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-rbdplugin-provisioner", "rbdplugin-provisioner"
                 ),
@@ -144,6 +144,7 @@ class RBDManifests(SafeManifest):
                 ),
                 ConfigureLivenessPrometheus(self, "DaemonSet", "csi-rbdplugin", "rbdplugin"),
                 ConfigureLivenessPrometheus(self, "Service", "csi-metrics-rbdplugin", "rbdplugin"),
+                ManifestLabel(self),
             ],
         )
         self.charm = charm

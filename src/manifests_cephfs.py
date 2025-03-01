@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry
+from ops.manifests import Addition, ConfigRegistry, ManifestLabel
 from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
@@ -252,6 +252,7 @@ class CephFSManifests(SafeManifest):
                 ConfigureLivenessPrometheus(
                     self, "Service", "csi-metrics-cephfsplugin", "cephfsplugin"
                 ),
+                ManifestLabel(self),
             ],
         )
         self.charm = charm

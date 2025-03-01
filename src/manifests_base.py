@@ -266,7 +266,7 @@ class ProvisionerAdjustments(Patch):
 
         for c in obj.spec.template.spec.containers:
             for idx in range(len(c.args)):
-                if original_dn in c.args[idx]:
+                if original_dn in c.args[idx] and updated_dn not in c.args[idx]:
                     c.args[idx] = c.args[idx].replace(original_dn, updated_dn)
                 if "/var/lib/kubelet" in c.args[idx]:
                     c.args[idx] = c.args[idx].replace("/var/lib/kubelet", kubelet_dir)
