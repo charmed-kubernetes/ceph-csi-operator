@@ -1,13 +1,13 @@
 import logging
 import pickle
+from functools import cached_property
 from hashlib import md5
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
-from ops.manifests import Addition, ManifestLabel, Manifests, Patch
-from ops.manifests.literals import APP_LABEL
+from ops.manifests import Addition, Manifests, Patch
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +18,13 @@ class SafeManifest(Manifests):
     def hash(self) -> int:
         """Calculate a hash of the current configuration."""
         return int(md5(pickle.dumps(self.config)).hexdigest(), 16)
+
+    @property
+    def csidriver(self) -> "CSIDriverAdjustments":
+        for manipulation in self.manipulations:
+            if isinstance(manipulation, CSIDriverAdjustments):
+                return manipulation
+        raise ValueError("CSIDriverAdjustments not found")
 
     @property
     def config(self) -> Dict[str, Any]:
@@ -34,16 +41,6 @@ class AdjustNamespace(Patch):
         if isinstance(obj, NamespacedResource) and obj.metadata:
             ns = self.manifests.config["namespace"]
             obj.metadata.namespace = ns
-
-
-class ManifestLabelExcluder(ManifestLabel):
-    """Exclude applying labels to CSIDriver."""
-
-    def __call__(self, obj: AnyResource) -> None:
-        super().__call__(obj)
-        if obj.kind == "CSIDriver" and obj.metadata and obj.metadata.labels:
-            # Remove the app label from the CSIDriver to disassociate it from the application
-            obj.metadata.labels.pop(APP_LABEL, None)
 
 
 class RbacAdjustments(Patch):
@@ -251,3 +248,94 @@ class CephToleration(Toleration):
             return [cls._from_string(toleration) for toleration in tolerations.split()]
         except ValueError as e:
             raise ValueError(f"Invalid tolerations: {e}") from e
+
+
+class ProvisionerAdjustments(Patch):
+    """Update provisioner manifest objects."""
+
+    PROVISIONER_NAME: str
+    PLUGIN_NAME: str
+
+    def tolerations(self) -> Tuple[List[CephToleration], bool]:
+        return [], False
+
+    def adjust_container_specs(self, obj: AnyResource) -> None:
+        csidriver = cast(SafeManifest, self.manifests).csidriver
+        original_dn, updated_dn = csidriver.default_name, csidriver.formatted
+        kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
+
+        for c in obj.spec.template.spec.containers:
+            for idx in range(len(c.args)):
+                if original_dn in c.args[idx] and updated_dn not in c.args[idx]:
+                    c.args[idx] = c.args[idx].replace(original_dn, updated_dn)
+                if "/var/lib/kubelet" in c.args[idx]:
+                    c.args[idx] = c.args[idx].replace("/var/lib/kubelet", kubelet_dir)
+            for m in c.volumeMounts:
+                m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
+        for v in obj.spec.template.spec.volumes:
+            if v.hostPath:
+                v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
+                v.hostPath.path = v.hostPath.path.replace(original_dn, updated_dn)
+
+    def __call__(self, obj: AnyResource) -> None:
+        """Use the provisioner-replicas and enable-host-networking to update obj."""
+        tolerations, legacy = self.tolerations()
+
+        if (
+            obj.kind == "Deployment"
+            and obj.metadata
+            and obj.metadata.name == self.PROVISIONER_NAME
+        ):
+            obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
+            log.info(f"Updating deployment replicas to {replica}")
+
+            obj.spec.template.spec.tolerations = tolerations
+            log.info("Updating deployment tolerations")
+
+            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
+                "enable-host-networking"
+            )
+            log.info(f"Updating deployment hostNetwork to {host_network}")
+
+            log.info("Updating deployment specs")
+            self.adjust_container_specs(obj)
+
+        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == self.PLUGIN_NAME:
+            log.info("Updating daemonset tolerations")
+            obj.spec.template.spec.tolerations = (
+                tolerations if not legacy else [CephToleration(operator="Exists")]
+            )
+
+            log.info("Updating daemonset specs")
+            self.adjust_container_specs(obj)
+
+
+class CSIDriverAdjustments(Patch):
+    """Update CSI driver."""
+
+    NAME_FORMATTER = "csidriver-name-formatter"
+    REQUIRED_CONFIG = {NAME_FORMATTER}
+
+    def __init__(self, manifests: Manifests, default_name: str):
+        super().__init__(manifests)
+        self.default_name = default_name
+
+    @cached_property
+    def formatted(self) -> str:
+        """Rename the object."""
+        formatter = self.manifests.config[self.NAME_FORMATTER]
+        fmt_context = {
+            "name": self.default_name,
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+        }
+        return formatter.format(**fmt_context)
+
+    def __call__(self, obj: AnyResource) -> None:
+        """Format the name for the CSIDriver and and update obj."""
+        if not obj.metadata or not obj.metadata.name:
+            log.error("Object is missing metadata or name. %s", obj)
+            return
+
+        if obj.kind == "CSIDriver":
+            obj.metadata.name = self.formatted
