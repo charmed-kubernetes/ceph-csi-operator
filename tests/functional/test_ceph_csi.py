@@ -18,6 +18,7 @@ from utils import render_j2_template, wait_for_pod
 
 logger = logging.getLogger(__name__)
 
+LATEST_RELEASE = ""  # ops.manifest will load the latest release when unspecified
 TEST_PATH = Path(__file__).parent
 TEMPLATE_DIR = TEST_PATH / "templates"
 TEST_OVERLAY = TEST_PATH / "overlay.yaml"
@@ -45,12 +46,16 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str):
         logger.info("Building ceph-csi charm.")
         charm = await ops_test.build_charm(".")
 
-    bundle_vars = {"charm": charm.resolve(), "namespace": namespace}
+    bundle_vars = {
+        "charm": charm.resolve(),
+        "namespace": namespace,
+        "release": environ.get("TEST_RELEASE", LATEST_RELEASE),
+    }
     proxy_settings = environ.get("TEST_HTTPS_PROXY")
     if proxy_settings:
         bundle_vars["https_proxy"] = proxy_settings
 
-    overlays = [ops_test.Bundle("kubernetes-core", channel="stable"), TEST_OVERLAY]
+    overlays = [ops_test.Bundle("canonical-kubernetes", channel="latest/edge"), TEST_OVERLAY]
 
     bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
 
@@ -101,7 +106,7 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     config.load_kube_config(str(kube_config))
     apps_api = client.AppsV1Api()
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
-    k8s_workers = ops_test.model.applications["kubernetes-worker"]
+    k8s_workers = ops_test.model.applications["k8s-worker"]
     assert rbdplugin.status.replicas == 1  # from the test overlay.yaml
     # Due to anti-affinity rules on the control-plane, the ready replicas
     # are limited to the number of worker nodes, of which there are 1
@@ -154,21 +159,26 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
     )
     writing_pod_name = writing_pod["metadata"]["name"]
 
-    logger.info("Creating PersistentVolumeClaim %s", storage["metadata"]["name"])
-    utils.create_from_dict(k8s_api_client, storage)
+    try:
+        logger.info("Creating PersistentVolumeClaim %s", storage["metadata"]["name"])
+        utils.create_from_dict(k8s_api_client, storage)
 
-    logger.info("Creating Pod %s", writing_pod_name)
-    utils.create_from_dict(k8s_api_client, writing_pod)
-    wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
+        logger.info("Creating Pod %s", writing_pod_name)
+        utils.create_from_dict(k8s_api_client, writing_pod)
+        wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
-    logger.info("Creating Pod %s", reading_pod_name)
-    utils.create_from_dict(k8s_api_client, reading_pod)
-    wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
+        logger.info("Creating Pod %s", reading_pod_name)
+        utils.create_from_dict(k8s_api_client, reading_pod)
+        wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
-    pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
-    assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
-        reading_pod_name, writing_pod_name
-    )
+        pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
+        assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
+            reading_pod_name, writing_pod_name
+        )
+    finally:
+        core_api.delete_namespaced_pod(reading_pod_name, namespace)
+        core_api.delete_namespaced_pod(writing_pod_name, namespace)
+        core_api.delete_namespaced_persistent_volume_claim(storage["metadata"]["name"], namespace)
 
 
 async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest):
@@ -257,7 +267,7 @@ async def test_cephfs(kube_config: Path, namespace: str, ops_test):
     """Test that ceph-csi deployments include cephfs."""
     config.load_kube_config(str(kube_config))
     apps_api = client.AppsV1Api()
-    k8s_workers = ops_test.model.applications["kubernetes-worker"]
+    k8s_workers = ops_test.model.applications["k8s-worker"]
 
     (cephfsplugin,) = apps_api.list_namespaced_deployment(namespace, **CEPHFS_LS).items
     assert cephfsplugin.status.ready_replicas == len(k8s_workers.units)
@@ -270,11 +280,11 @@ async def test_conflicting_ceph_csi(ops_test: OpsTest):
     app = ops_test.model.applications[CEPH_CSI_ALT]
     expected_msg = "resource collisions (action: list-resources)"
     try:
-        await app.relate("kubernetes", "kubernetes-control-plane")
+        await app.relate("kubernetes-info", "k8s")
         await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="blocked", timeout=5 * 60)
-        assert expected_msg in app.units[0].workload_status_message
+        assert any(expected_msg in u.workload_status_message for u in app.units)
     finally:
-        await app.destroy_relation("kubernetes", "kubernetes-control-plane:juju-info")
+        await app.destroy_relation("kubernetes-info", "k8s")
         await ops_test.model.wait_for_idle(
             apps=[CEPH_CSI_ALT], wait_for_exact_units=0, timeout=5 * 60
         )
@@ -307,10 +317,15 @@ async def test_duplicate_ceph_csi(ops_test: OpsTest, namespace: str, kube_config
     )
 
     try:
-        await app.relate("kubernetes", "kubernetes-control-plane")
+        await app.relate("kubernetes-info", "k8s")
         await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="active", timeout=5 * 60)
+
+        await run_test_storage_class(kube_config, "ceph-xfs")
+        await run_test_storage_class(kube_config, f"ceph-xfs-{alt_namespace}")
+        await run_test_storage_class(kube_config, "ceph-ext4")
+        await run_test_storage_class(kube_config, f"ceph-ext4-{alt_namespace}")
     finally:
-        await app.destroy_relation("kubernetes", "kubernetes-control-plane:juju-info")
+        await app.destroy_relation("kubernetes-info", "k8s")
         await ops_test.model.wait_for_idle(
             apps=[CEPH_CSI_ALT], wait_for_exact_units=0, timeout=5 * 60
         )

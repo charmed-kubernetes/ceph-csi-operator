@@ -28,7 +28,7 @@ async def kube_config(ops_test: OpsTest) -> AsyncGenerator[Path, None]:
 
     Config file is fetched from kubernetes-control-plane unit and stored in the temporary file.
     """
-    k_c_p = ops_test.model.applications["kubernetes-control-plane"]
+    k_c_p = ops_test.model.applications["k8s"]
     (leader,) = [u for u in k_c_p.units if (await u.is_leader_from_status())]
     action = await leader.run_action("get-kubeconfig")
     action = await action.wait()
@@ -41,7 +41,7 @@ async def kube_config(ops_test: OpsTest) -> AsyncGenerator[Path, None]:
     if not success:
         logging.error(f"status: {action.status}")
         logging.error(f"results:\n{yaml.safe_dump(action.results, indent=2)}")
-        pytest.fail("Failed to copy kubeconfig from kubernetes-control-plane")
+        pytest.fail("Failed to copy kubeconfig from k8s")
 
     kubeconfig_path = ops_test.tmp_path / "kubeconfig"
     with kubeconfig_path.open("w") as f:
