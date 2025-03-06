@@ -303,7 +303,7 @@ class CephCsiCharm(ops.CharmBase):
     def check_namespace(self) -> None:
         self.unit.status = ops.MaintenanceStatus("Evaluating namespace")
         try:
-            self._client.get(Namespace, name=self.stored.namespace)  # type: ignore
+            self._client.get(Namespace, name=self.stored.namespace)
         except ApiError as e:
             if "not found" in str(e.status.message):
                 status.add(ops.BlockedStatus(f"Missing namespace '{self.stored.namespace}'"))
