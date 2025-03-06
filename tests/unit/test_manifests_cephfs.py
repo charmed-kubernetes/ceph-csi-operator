@@ -8,11 +8,13 @@ from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 
+from manifests_base import CSIDriverAdjustments
 from manifests_cephfs import (
+    STORAGE_TYPE,
     CephFilesystem,
     CephFSManifests,
     CephStorageClass,
-    ProvisionerAdjustments,
+    FSProvAdjustments,
     StorageSecret,
 )
 
@@ -35,8 +37,8 @@ TEST_CEPH_FS_ALT = CephFilesystem(
 upstream_path = Path(__file__).parent.parent.parent / "upstream"
 cephfs_path = upstream_path / "cephfs"
 current_path = cephfs_path / "manifests" / (cephfs_path / "version").read_text().strip()
-provisioner_path = current_path / (ProvisionerAdjustments.PROVISIONER_NAME + ".yaml")
-plugin_path = current_path / (ProvisionerAdjustments.PLUGIN_NAME + ".yaml")
+provisioner_path = current_path / (FSProvAdjustments.PROVISIONER_NAME + ".yaml")
+plugin_path = current_path / (FSProvAdjustments.PLUGIN_NAME + ".yaml")
 
 
 def test_storage_secret_modelled(caplog):
@@ -75,18 +77,23 @@ def test_storage_secret_modelled(caplog):
 def test_ceph_provisioner_adjustment_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
+    alt_ns = "diff-ns"
     alt_path = "/var/lib/kubelet-alt"
     manifest.config = {
+        "csidriver-name-formatter": "{name}",
+        "namespace": alt_ns,
         "provisioner-replicas": 3,
         "enable-host-networking": False,
         "kubelet_dir": alt_path,
     }
-    cpa = ProvisionerAdjustments(manifest)
+    manifest.csidriver = CSIDriverAdjustments(manifest, CephFSManifests.DRIVER_NAME)
+    cpa = FSProvAdjustments(manifest)
     resources = list(yaml.safe_load_all(provisioner_path.read_text()))
     resource = Deployment.from_dict(resources[1])
     assert cpa(resource) is None
     assert "Updating deployment replicas to 3" in caplog.text
     assert "Updating deployment hostNetwork to False" in caplog.text
+    assert "Updating deployment specs" in caplog.text
     caplog.clear()
 
     resources = list(yaml.safe_load_all(plugin_path.read_text()))
@@ -95,18 +102,19 @@ def test_ceph_provisioner_adjustment_modelled(caplog):
     assert alt_path in resource.spec.template.spec.containers[1].args[2]
     assert alt_path in resource.spec.template.spec.containers[0].volumeMounts[1].mountPath
     assert "Updating daemonset tolerations" in caplog.text
-    assert "Updating daemonset kubeletDir to /var/lib/kubelet-alt" in caplog.text
+    assert "Updating daemonset specs" in caplog.text
 
 
 def test_ceph_storage_class_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
-    csc = CephStorageClass(manifest)
+    manifest.purging = False
+    manifest.csidriver = CSIDriverAdjustments(manifest, CephFSManifests.DRIVER_NAME)
+    csc = CephStorageClass(manifest, STORAGE_TYPE)
     alt_ns = "diff-ns"
 
     manifest.config = {
-        "enabled": True,
-        "fsid": "abcd",
+        "csidriver-name-formatter": "{name}",
         "fs_list": [TEST_CEPH_FS_ALT],
         "namespace": alt_ns,
         "default-storage": TEST_CEPH_FS_ALT.name,
@@ -114,13 +122,22 @@ def test_ceph_storage_class_modelled(caplog):
         "cephfs-storage-class-name-formatter": "{name}",
     }
 
+    assert csc() == []
+    assert "Skipping CephFS storage class creation since it's disabled" in caplog.text
+
+    manifest.config["enabled"] = True
+    caplog.clear()
+    assert csc() == []
+    assert "CephFS is missing a filesystem: 'fsid'" in caplog.text
+
+    manifest.config["fsid"] = "abcd"
     caplog.clear()
     expected = StorageClass(
         metadata=ObjectMeta(
             name=TEST_CEPH_FS_ALT.name,
             annotations={"storageclass.kubernetes.io/is-default-class": "true"},
         ),
-        provisioner=CephStorageClass.PROVISIONER,
+        provisioner=CephFSManifests.DRIVER_NAME,
         parameters={
             "clusterID": "abcd",
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
@@ -140,14 +157,40 @@ def test_ceph_storage_class_modelled(caplog):
     assert f"Modelling storage class sc='{TEST_CEPH_FS_ALT.name}'" in caplog.text
 
 
+def test_ceph_storage_class_purging(caplog):
+    caplog.set_level(logging.INFO)
+    manifest = mock.MagicMock()
+    manifest.purging = True
+    manifest.config = {
+        "csidriver-name-formatter": "{name}",
+        "namespace": "purge-ns",
+    }
+    manifest.csidriver = CSIDriverAdjustments(manifest, CephFSManifests.DRIVER_NAME)
+    csc = CephStorageClass(manifest, STORAGE_TYPE)
+
+    caplog.clear()
+    expected = StorageClass(
+        metadata=ObjectMeta(),
+        provisioner=CephFSManifests.DRIVER_NAME,
+    )
+    assert csc() == [expected]
+
+
 def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = CephFSManifests(charm)
+    sc_name_formatter_key = "cephfs-storage-class-name-formatter"
     assert manifests.evaluate() is None
     assert "Skipping CephFS evaluation since it's disabled" in caplog.text
 
     charm.config = {"cephfs-enable": True}
+    assert (
+        manifests.evaluate()
+        == "CephFS manifests require the definition of 'ceph-rbac-name-formatter'"
+    )
+
+    charm.config["ceph-rbac-name-formatter"] = "{name}"
     assert manifests.evaluate() == "CephFS manifests require the definition of 'kubernetes_key'"
 
     charm.config["kubernetes_key"] = "123"
@@ -162,16 +205,16 @@ def test_manifest_evaluation(caplog):
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS]
     assert manifests.evaluate() == err_formatter.format(
-        "empty " + CephStorageClass.STORAGE_NAME_FORMATTER
+        "Missing storage class name " + sc_name_formatter_key
     )
 
     charm.config[CephStorageClass.FILESYSTEM_LISTING] = [TEST_CEPH_FS, TEST_CEPH_FS_ALT]
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = CephStorageClass.STORAGE_NAME
+    charm.config[sc_name_formatter_key] = STORAGE_TYPE
     assert manifests.evaluate() == err_formatter.format(
-        CephStorageClass.STORAGE_NAME_FORMATTER + " does not generate unique names"
+        sc_name_formatter_key + " does not generate unique names"
     )
 
-    charm.config[CephStorageClass.STORAGE_NAME_FORMATTER] = "cephfs-{name}"
+    charm.config[sc_name_formatter_key] = "cephfs-{name}"
     assert manifests.evaluate() is None
 
     charm.config["cephfs-tolerations"] = "key=value,Foo"

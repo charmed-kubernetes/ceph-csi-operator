@@ -4,26 +4,30 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Patch
+from ops.manifests import Addition, ConfigRegistry, ManifestLabel
 from ops.manifests.manipulations import Subtraction
 
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
     ConfigureLivenessPrometheus,
+    CSIDriverAdjustments,
+    ProvisionerAdjustments,
+    RbacAdjustments,
     SafeManifest,
-    update_storage_params,
+    StorageClassFactory,
 )
 
 if TYPE_CHECKING:
     from charm import CephCsiCharm
 
 log = logging.getLogger(__name__)
+STORAGE_TYPE = "cephfs"
 
 
 @dataclass
@@ -78,17 +82,15 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(Addition):
+class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
-    STORAGE_NAME = "cephfs"
-    STORAGE_NAME_FORMATTER = "cephfs-storage-class-name-formatter"
     FILESYSTEM_LISTING = "fs_list"
-    REQUIRED_CONFIG = {STORAGE_NAME_FORMATTER, "fsid", FILESYSTEM_LISTING}
-    PROVISIONER = "cephfs.csi.ceph.com"
+    REQUIRED_CONFIG = {"fsid", FILESYSTEM_LISTING}
 
     def create(self, param: CephStorageClassParameters) -> AnyResource:
         """Create a storage class object."""
+        driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
         ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=param.storage_class_name)
@@ -111,12 +113,12 @@ class CephStorageClass(Addition):
         if mounter in ["kernel", "fuse"]:
             parameters["mounter"] = mounter
 
-        update_storage_params(self.STORAGE_NAME, self.manifests.config, parameters)
+        self.update_params(parameters)
 
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
-                provisioner=self.PROVISIONER,
+                provisioner=driver_name,
                 allowVolumeExpansion=True,
                 reclaimPolicy="Delete",
                 parameters=parameters,
@@ -124,15 +126,21 @@ class CephStorageClass(Addition):
         )
 
     def parameter_list(self) -> List[CephStorageClassParameters]:
-        """Accumulate names and settings of the storage classes."""
-        enabled = self.manifests.config.get("enabled")
+        """Accumulate names and settings of the storage classes.
+
+        This can be a difficult problem to resolve the actual names
+        of the storage classes this method creates when not all the data
+        is available from the ceph cluster.
+
+        For example, the fs_data not being available from the cluster
+        means we cannot determine the data pools and cannot format a
+        name for the storage class for that pool.
+
+        In some event we cannot generate the parameter_list, this method
+        will raise a ValueError exception indicated the value missing.
+        """
         fsid = self.manifests.config.get("fsid")
         fs_data: List[CephFilesystem] = self.manifests.config.get(self.FILESYSTEM_LISTING) or []
-        formatter = str(self.manifests.config.get(self.STORAGE_NAME_FORMATTER) or "")
-
-        if not enabled:
-            log.info("Ignore CephFS Storage Class")
-            return []
 
         if not fsid:
             log.error("CephFS is missing a filesystem: 'fsid'")
@@ -142,21 +150,17 @@ class CephStorageClass(Addition):
             log.error("CephFS is missing a filesystem listing: '%s'", self.FILESYSTEM_LISTING)
             raise ValueError("missing filesystem listing")
 
-        if not formatter:
-            log.error("CephFS is missing '%s'", self.STORAGE_NAME_FORMATTER)
-            raise ValueError(f"empty {self.STORAGE_NAME_FORMATTER}")
+        self.evaluate()
 
         sc_names: List[CephStorageClassParameters] = []
         for fs in fs_data:
             for idx, data_pool in enumerate(fs.data_pools):
                 context = {
-                    "app": self.manifests.model.app.name,
-                    "namespace": self.manifests.config["namespace"],
                     "name": fs.name,
                     "pool": data_pool,
                     "pool-id": fs.data_pool_ids[idx],
                 }
-                sc_name = formatter.format(**context)
+                sc_name = self.name(context)
                 sc_names += [CephStorageClassParameters(fsid, sc_name, fs.name, data_pool)]
 
         if len(set(n.storage_class_name for n in sc_names)) != len(sc_names):
@@ -165,19 +169,40 @@ class CephStorageClass(Addition):
                 "Consider improving the config '%s' to expand to meet the number of pools."
                 "\n\tfile systems    = %s"
                 "\n\tstorage_classes = %s",
-                self.STORAGE_NAME_FORMATTER,
+                self.name_formatter_key,
                 fs_data,
                 sc_names,
             )
-            raise ValueError(f"{self.STORAGE_NAME_FORMATTER} does not generate unique names")
+            raise ValueError(f"{self.name_formatter_key} does not generate unique names")
         return sc_names
 
     def __call__(self) -> List[AnyResource]:
-        """Craft the storage class object."""
-        return [self.create(class_param) for class_param in self.parameter_list()]
+        """Craft the storage class objects."""
+        driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
+
+        if cast(SafeManifest, self.manifests).purging:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return [StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))]
+
+        if not self.manifests.config.get("enabled"):
+            # If cephfs is not enabled, we cannot add any storage classes
+            log.info("Skipping CephFS storage class creation since it's disabled")
+            return []
+
+        try:
+            parameter_list = self.parameter_list()
+        except ValueError as err:
+            # If we cannot generate the parameter list, we cannot add
+            # any storage classes
+            log.error("Failed to list storage classes to add: %s", err)
+            return []
+
+        return [self.create(class_param) for class_param in parameter_list]
 
 
-class ProvisionerAdjustments(Patch):
+class FSProvAdjustments(ProvisionerAdjustments):
     """Update Cephfs provisioner."""
 
     PROVISIONER_NAME = "csi-cephfsplugin-provisioner"
@@ -189,52 +214,6 @@ class ProvisionerAdjustments(Patch):
             return [], True
         return CephToleration.from_space_separated(cfg), False
 
-    def __call__(self, obj: AnyResource) -> None:
-        """Use the provisioner-replicas and enable-host-networking to update obj."""
-        tolerations, legacy = self.tolerations()
-        if (
-            obj.kind == "Deployment"
-            and obj.metadata
-            and obj.metadata.name == self.PROVISIONER_NAME
-        ):
-            obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
-            log.info(f"Updating deployment replicas to {replica}")
-
-            obj.spec.template.spec.tolerations = tolerations
-            log.info("Updating deployment tolerations")
-
-            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
-                "enable-host-networking"
-            )
-            log.info(f"Updating deployment hostNetwork to {host_network}")
-        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == self.PLUGIN_NAME:
-            obj.spec.template.spec.tolerations = (
-                tolerations if not legacy else [CephToleration(operator="Exists")]
-            )
-            log.info("Updating daemonset tolerations")
-
-            kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
-
-            for c in obj.spec.template.spec.containers:
-                c.args = [arg.replace("/var/lib/kubelet", kubelet_dir) for arg in c.args]
-                for m in c.volumeMounts:
-                    m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
-            for v in obj.spec.template.spec.volumes:
-                if v.hostPath:
-                    v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
-            log.info(f"Updating daemonset kubeletDir to {kubelet_dir}")
-
-
-class RbacAdjustments(Patch):
-    """Update RBD RBAC Attributes."""
-
-    def __call__(self, obj: AnyResource) -> None:
-        ns = self.manifests.config["namespace"]
-        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
-            for each in obj.subjects:
-                if each.kind == "ServiceAccount":
-                    each.namespace = ns
-
 
 class RemoveCephFS(Subtraction):
     """Remove all Cephfs resources when disabled."""
@@ -245,19 +224,21 @@ class RemoveCephFS(Subtraction):
 
 
 class CephFSManifests(SafeManifest):
-    """Deployment Specific details for the aws-ebs-csi-driver."""
+    """Deployment Specific details for the cephfs.csi.ceph.com driver."""
+
+    DRIVER_NAME = "cephfs.csi.ceph.com"
 
     def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
-            "cephfs",
+            STORAGE_TYPE,
             charm.model,
             "upstream/cephfs",
             [
                 StorageSecret(self),
-                ManifestLabel(self),
                 ConfigRegistry(self),
-                ProvisionerAdjustments(self),
-                CephStorageClass(self),
+                FSProvAdjustments(self),
+                CephStorageClass(self, STORAGE_TYPE),
+                CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
                 RemoveCephFS(self),
                 AdjustNamespace(self),
@@ -271,6 +252,7 @@ class CephFSManifests(SafeManifest):
                 ConfigureLivenessPrometheus(
                     self, "Service", "csi-metrics-cephfsplugin", "cephfsplugin"
                 ),
+                ManifestLabel(self),
             ],
         )
         self.charm = charm
@@ -288,9 +270,10 @@ class CephFSManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
-        config["namespace"] = self.charm.stored.namespace
         config["release"] = config.pop("release", None)
-        config["enabled"] = self.purgeable or config.get("cephfs-enable", None)
+        config["enabled"] = config.get("cephfs-enable", None)
+        config["namespace"] = self.charm.stored.namespace
+        config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
     def evaluate(self) -> Optional[str]:
@@ -299,7 +282,7 @@ class CephFSManifests(SafeManifest):
             log.info("Skipping CephFS evaluation since it's disabled")
             return None
 
-        props = StorageSecret.REQUIRED_CONFIG.keys()
+        props = StorageSecret.REQUIRED_CONFIG.keys() | RbacAdjustments.REQUIRED_CONFIG
         for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
@@ -313,9 +296,9 @@ class CephFSManifests(SafeManifest):
         except ValueError as err:
             return f"Cannot adjust CephFS Pods: {err}"
 
-        sc_manipulator = next(m for m in self.manipulations if isinstance(m, CephStorageClass))
+        storage_class = next(m for m in self.manipulations if isinstance(m, CephStorageClass))
         try:
-            sc_manipulator.parameter_list()
+            storage_class.parameter_list()
         except ValueError as err:
             return f"CephFS manifests failed to create storage classes: {err}"
 

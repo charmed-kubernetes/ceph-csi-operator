@@ -1,22 +1,30 @@
 import logging
 import pickle
+from functools import cached_property
 from hashlib import md5
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, Generator, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
-from ops.manifests import Manifests, Patch
+from ops.manifests import Addition, Manifests, Patch
 
 log = logging.getLogger(__name__)
 
 
 class SafeManifest(Manifests):
-    purgeable: bool = False
+    purging: bool = False
 
     def hash(self) -> int:
         """Calculate a hash of the current configuration."""
         return int(md5(pickle.dumps(self.config)).hexdigest(), 16)
+
+    @property
+    def csidriver(self) -> "CSIDriverAdjustments":
+        for manipulation in self.manipulations:
+            if isinstance(manipulation, CSIDriverAdjustments):
+                return manipulation
+        raise ValueError("CSIDriverAdjustments not found")
 
     @property
     def config(self) -> Dict[str, Any]:
@@ -33,6 +41,116 @@ class AdjustNamespace(Patch):
         if isinstance(obj, NamespacedResource) and obj.metadata:
             ns = self.manifests.config["namespace"]
             obj.metadata.namespace = ns
+
+
+class RbacAdjustments(Patch):
+    """Update RBAC Attributes."""
+
+    RBAC_NAME_FORMATTER = "ceph-rbac-name-formatter"
+    REQUIRED_CONFIG = {RBAC_NAME_FORMATTER}
+
+    def _rename(self, name: str) -> str:
+        """Rename the object."""
+        formatter = self.manifests.config[self.RBAC_NAME_FORMATTER]
+        fmt_context = {
+            "name": name,
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+        }
+        return formatter.format(**fmt_context)
+
+    def __call__(self, obj: AnyResource) -> None:
+        ns = self.manifests.config["namespace"]
+        if not obj.metadata or not obj.metadata.name:
+            log.error("Object is missing metadata or name. %s", obj)
+            return
+
+        if obj.kind in ["ClusterRole", "ClusterRoleBinding"]:
+            obj.metadata.name = self._rename(obj.metadata.name)
+
+        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
+            for each in obj.subjects:
+                # RoleBinding and ClusterRoleBinding subjects
+                # reference ServiceAccount in a different namespace
+                # so we need to set the namespace to the one we are deploying
+                if each.kind == "ServiceAccount":
+                    each.namespace = ns
+            if obj.roleRef.kind == "ClusterRole":
+                # ClusterRoleBinding roleRef references a ClusterRole
+                # which is not namespaced and has been renamed
+                obj.roleRef.name = self._rename(obj.roleRef.name)
+
+
+class StorageClassFactory(Addition):
+    """Create ceph-csi storage classes."""
+
+    def __init__(self, manifests: Manifests, fs_type: str):
+        super().__init__(manifests)
+        self._fs_type = fs_type
+
+    @property
+    def storage_class_parameters_key(self) -> str:
+        """Storage class parameters key."""
+        return f"{self._fs_type}-storage-class-parameters"
+
+    @property
+    def storage_class_parameters(self) -> Dict[str, Optional[str]]:
+        """Storage class parameters."""
+        params = {}
+        cfg_name = self.storage_class_parameters_key
+        adjustments = self.manifests.config.get(cfg_name)
+        if not adjustments:
+            log.info(f"No adjustments for {self._fs_type} storage-class parameters")
+            return params
+
+        for adjustment in adjustments.split():
+            key_value = adjustment.split("=", 1)
+            if len(key_value) == 2:
+                params[key_value[0]] = key_value[1]
+            elif adjustment.endswith("-"):
+                params[adjustment[:-1]] = None
+            else:
+                log.error("Invalid storage-class-parameter: %s in %s", adjustment, cfg_name)
+                raise ValueError(f"Invalid storage-class-parameter: {adjustment} in {cfg_name}")
+
+        return params
+
+    @property
+    def name_formatter_key(self) -> str:
+        """Storage class name formatter key."""
+        return f"{self._fs_type}-storage-class-name-formatter"
+
+    @property
+    def name_formatter(self) -> str:
+        """Storage class name formatter."""
+        key = self.name_formatter_key
+        return str(self.manifests.config.get(key) or "")
+
+    def name(self, context: Dict[str, Any] = {}) -> str:
+        """Create a storage-class name using the name formatter."""
+        fmt_context = {
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+            **context,
+        }
+        return self.name_formatter.format(**fmt_context)
+
+    def update_params(self, params: Dict[str, str]) -> None:
+        """Adjust parameters for storage class."""
+        for key, value in self.storage_class_parameters.items():
+            if value is None:
+                params.pop(key, None)
+            else:
+                params[key] = value
+
+    def evaluate(self) -> None:
+        """Evaluate the storage class."""
+        if not self.name_formatter:
+            log.error("Missing storage class name %s", self.name_formatter_key)
+            raise ValueError(f"Missing storage class name {self.name_formatter_key}")
+
+        if not self.storage_class_parameters:
+            log.warning("No storage class parameters for %s", self._fs_type)
 
 
 class ConfigureLivenessPrometheus(Patch):
@@ -132,18 +250,92 @@ class CephToleration(Toleration):
             raise ValueError(f"Invalid tolerations: {e}") from e
 
 
-def update_storage_params(ceph_type: str, config: Dict[str, Any], params: Dict[str, str]) -> None:
-    """Adjust parameters for storage class."""
-    cfg_name = f"{ceph_type}-storage-class-parameters"
-    if not (adjustments := config.get(cfg_name)):
-        log.info(f"No adjustments for {ceph_type} storage-class parameters")
-        return
+class ProvisionerAdjustments(Patch):
+    """Update provisioner manifest objects."""
 
-    for adjustment in adjustments.split(" "):
-        key_value = adjustment.split("=", 1)
-        if len(key_value) == 2:
-            params[key_value[0]] = key_value[1]
-        elif adjustment.endswith("-"):
-            params.pop(adjustment[:-1], None)
-        else:
-            log.warning("Invalid parameter: %s in %s", adjustment, cfg_name)
+    PROVISIONER_NAME: str
+    PLUGIN_NAME: str
+
+    def tolerations(self) -> Tuple[List[CephToleration], bool]:
+        return [], False
+
+    def adjust_container_specs(self, obj: AnyResource) -> None:
+        csidriver = cast(SafeManifest, self.manifests).csidriver
+        original_dn, updated_dn = csidriver.default_name, csidriver.formatted
+        kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
+
+        for c in obj.spec.template.spec.containers:
+            for idx in range(len(c.args)):
+                if original_dn in c.args[idx] and updated_dn not in c.args[idx]:
+                    c.args[idx] = c.args[idx].replace(original_dn, updated_dn)
+                if "/var/lib/kubelet" in c.args[idx]:
+                    c.args[idx] = c.args[idx].replace("/var/lib/kubelet", kubelet_dir)
+            for m in c.volumeMounts:
+                m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
+        for v in obj.spec.template.spec.volumes:
+            if v.hostPath:
+                v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
+                v.hostPath.path = v.hostPath.path.replace(original_dn, updated_dn)
+
+    def __call__(self, obj: AnyResource) -> None:
+        """Use the provisioner-replicas and enable-host-networking to update obj."""
+        tolerations, legacy = self.tolerations()
+
+        if (
+            obj.kind == "Deployment"
+            and obj.metadata
+            and obj.metadata.name == self.PROVISIONER_NAME
+        ):
+            obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
+            log.info(f"Updating deployment replicas to {replica}")
+
+            obj.spec.template.spec.tolerations = tolerations
+            log.info("Updating deployment tolerations")
+
+            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
+                "enable-host-networking"
+            )
+            log.info(f"Updating deployment hostNetwork to {host_network}")
+
+            log.info("Updating deployment specs")
+            self.adjust_container_specs(obj)
+
+        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == self.PLUGIN_NAME:
+            log.info("Updating daemonset tolerations")
+            obj.spec.template.spec.tolerations = (
+                tolerations if not legacy else [CephToleration(operator="Exists")]
+            )
+
+            log.info("Updating daemonset specs")
+            self.adjust_container_specs(obj)
+
+
+class CSIDriverAdjustments(Patch):
+    """Update CSI driver."""
+
+    NAME_FORMATTER = "csidriver-name-formatter"
+    REQUIRED_CONFIG = {NAME_FORMATTER}
+
+    def __init__(self, manifests: Manifests, default_name: str):
+        super().__init__(manifests)
+        self.default_name = default_name
+
+    @cached_property
+    def formatted(self) -> str:
+        """Rename the object."""
+        formatter = self.manifests.config[self.NAME_FORMATTER]
+        fmt_context = {
+            "name": self.default_name,
+            "app": self.manifests.model.app.name,
+            "namespace": self.manifests.config["namespace"],
+        }
+        return formatter.format(**fmt_context)
+
+    def __call__(self, obj: AnyResource) -> None:
+        """Format the name for the CSIDriver and and update obj."""
+        if not obj.metadata or not obj.metadata.name:
+            log.error("Object is missing metadata or name. %s", obj)
+            return
+
+        if obj.kind == "CSIDriver":
+            obj.metadata.name = self.formatted

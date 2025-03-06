@@ -3,19 +3,22 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel, Manifests, Patch
+from ops.manifests import Addition, ConfigRegistry, ManifestLabel
 
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
     ConfigureLivenessPrometheus,
+    CSIDriverAdjustments,
+    ProvisionerAdjustments,
+    RbacAdjustments,
     SafeManifest,
-    update_storage_params,
+    StorageClassFactory,
 )
 
 if TYPE_CHECKING:
@@ -50,30 +53,30 @@ class StorageSecret(Addition):
         )
 
 
-class CephStorageClass(Addition):
+class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
     REQUIRED_CONFIG = {"fsid"}
-    PROVISIONER = "rbd.csi.ceph.com"
-
-    def __init__(self, manifests: Manifests, fs_type: str):
-        super().__init__(manifests)
-        self.fs_type = fs_type
-
-    @property
-    def name(self) -> str:
-        return f"ceph-{self.fs_type}"
 
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
+        driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
+
+        if cast(SafeManifest, self.manifests).purging:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))
+
         clusterID = self.manifests.config.get("fsid")
+        fs_type = self._fs_type.split("-")[1]
         if not clusterID:
-            log.error(f"Ceph {self.fs_type.capitalize()} is missing required storage item: 'fsid'")
+            log.error(f"Ceph {fs_type.capitalize()} is missing required storage item: 'fsid'")
             return None
 
         ns = self.manifests.config["namespace"]
-        metadata: Dict[str, Any] = dict(name=self.name)
-        if self.manifests.config.get("default-storage") == self.name:
+        metadata: Dict = {"name": self.name()}
+        if self.manifests.config.get("default-storage") == metadata["name"]:
             metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
 
         log.info(f"Modelling storage class {metadata['name']}")
@@ -81,20 +84,20 @@ class CephStorageClass(Addition):
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": ns,
-            "csi.storage.k8s.io/fstype": self.fs_type,
+            "csi.storage.k8s.io/fstype": fs_type,
             "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
             "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
-            "pool": f"{self.fs_type}-pool",
+            "pool": f"{fs_type}-pool",
         }
 
-        update_storage_params(self.name, self.manifests.config, parameters)
+        self.update_params(parameters)
 
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
-                provisioner=self.PROVISIONER,
+                provisioner=driver_name,
                 allowVolumeExpansion=True,
                 mountOptions=["discard"],
                 reclaimPolicy="Delete",
@@ -103,61 +106,21 @@ class CephStorageClass(Addition):
         )
 
 
-class ProvisionerAdjustments(Patch):
+class RBDProvAdjustments(ProvisionerAdjustments):
     """Update RBD provisioner."""
 
-    def tolerations(self) -> List[CephToleration]:
+    PROVISIONER_NAME = "csi-rbdplugin-provisioner"
+    PLUGIN_NAME = "csi-rbdplugin"
+
+    def tolerations(self) -> Tuple[List[CephToleration], bool]:
         cfg = self.manifests.config.get("ceph-rbd-tolerations") or ""
-        return CephToleration.from_space_separated(cfg)
-
-    def __call__(self, obj: AnyResource) -> None:
-        """Mutates CSI RBD Provisioner Deployment replicas/hostNetwork and DaemonSet kubelet_dir paths."""
-        tolerations = self.tolerations()
-        if (
-            obj.kind == "Deployment"
-            and obj.metadata
-            and obj.metadata.name == "csi-rbdplugin-provisioner"
-        ):
-            obj.spec.replicas = replica = self.manifests.config.get("provisioner-replicas")
-            log.info(f"Updating deployment replicas to {replica}")
-
-            obj.spec.template.spec.tolerations = tolerations
-            log.info("Updating deployment tolerations")
-
-            obj.spec.template.spec.hostNetwork = host_network = self.manifests.config.get(
-                "enable-host-networking"
-            )
-            log.info(f"Updating deployment hostNetwork to {host_network}")
-
-        if obj.kind == "DaemonSet" and obj.metadata and obj.metadata.name == "csi-rbdplugin":
-            obj.spec.template.spec.tolerations = tolerations
-            log.info("Updating daemonset tolerations to operator=Exists")
-
-            kubelet_dir = self.manifests.config.get("kubelet_dir", "/var/lib/kubelet")
-
-            for c in obj.spec.template.spec.containers:
-                c.args = [arg.replace("/var/lib/kubelet", kubelet_dir) for arg in c.args]
-                for m in c.volumeMounts:
-                    m.mountPath = m.mountPath.replace("/var/lib/kubelet", kubelet_dir)
-            for v in obj.spec.template.spec.volumes:
-                if v.hostPath:
-                    v.hostPath.path = v.hostPath.path.replace("/var/lib/kubelet", kubelet_dir)
-            log.info(f"Updating RBD daemonset kubeletDir to {kubelet_dir}")
-
-
-class RbacAdjustments(Patch):
-    """Update RBD RBAC Attributes."""
-
-    def __call__(self, obj: AnyResource) -> None:
-        ns = self.manifests.config["namespace"]
-        if obj.kind in ["ClusterRoleBinding", "RoleBinding"]:
-            for each in obj.subjects:
-                if each.kind == "ServiceAccount":
-                    each.namespace = ns
+        return CephToleration.from_space_separated(cfg), False
 
 
 class RBDManifests(SafeManifest):
     """Deployment Specific details for the rbd.csi.ceph.com."""
+
+    DRIVER_NAME = "rbd.csi.ceph.com"
 
     def __init__(self, charm: "CephCsiCharm"):
         super().__init__(
@@ -166,12 +129,12 @@ class RBDManifests(SafeManifest):
             "upstream/rbd",
             [
                 StorageSecret(self),
-                ManifestLabel(self),
                 ConfigRegistry(self),
-                ProvisionerAdjustments(self),
-                CephStorageClass(self, "xfs"),  # creates ceph-xfs
-                CephStorageClass(self, "ext4"),  # creates ceph-ext4
+                RBDProvAdjustments(self),
+                CephStorageClass(self, "ceph-xfs"),  # creates ceph-xfs
+                CephStorageClass(self, "ceph-ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
+                CSIDriverAdjustments(self, self.DRIVER_NAME),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-rbdplugin-provisioner", "rbdplugin-provisioner"
@@ -181,6 +144,7 @@ class RBDManifests(SafeManifest):
                 ),
                 ConfigureLivenessPrometheus(self, "DaemonSet", "csi-rbdplugin", "rbdplugin"),
                 ConfigureLivenessPrometheus(self, "Service", "csi-metrics-rbdplugin", "rbdplugin"),
+                ManifestLabel(self),
             ],
         )
         self.charm = charm
@@ -200,11 +164,16 @@ class RBDManifests(SafeManifest):
 
         config["release"] = config.get("release", None)
         config["namespace"] = self.charm.stored.namespace
+        config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
-        props = StorageSecret.REQUIRED_CONFIG.keys() | CephStorageClass.REQUIRED_CONFIG
+        props = (
+            StorageSecret.REQUIRED_CONFIG.keys()
+            | CephStorageClass.REQUIRED_CONFIG
+            | RbacAdjustments.REQUIRED_CONFIG
+        )
         for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
@@ -218,4 +187,10 @@ class RBDManifests(SafeManifest):
         except ValueError as err:
             return f"Cannot adjust CephRBD Pods: {err}"
 
+        for storage_class in self.manipulations:
+            if isinstance(storage_class, CephStorageClass):
+                try:
+                    storage_class.evaluate()
+                except ValueError as err:
+                    return f"RBD manifests failed to create storage classes: {err}"
         return None

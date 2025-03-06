@@ -68,6 +68,28 @@ config:
       description: "Whether or not csi-*plugin-provisioner deployments use host-networking"
       type: boolean
 
+    csidriver-name-formatter:
+      default: "{name}"
+      description: |
+        Formatter for the 2 CSIDrivers managed by this charm:
+          - rbd.csi.ceph.com
+          - cephfs.csi.ceph.com
+
+        The formatter is a string that can contain the following placeholders:
+          - {name}             - original name from the manifest
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+
+        Example:
+          juju config ceph-csi csidriver-name-formatter="{app}.{name}"
+
+        The default is to use the built-in storage classname
+
+        NOTE: Can only be specified on deployment since some
+        attributes of kubernetes resources cannot be modified
+        once installed.
+      type: string
+
     cephfs-storage-class-name-formatter:
       default: "cephfs"
       description: |
@@ -81,7 +103,7 @@ config:
           - {pool-id}          - the id   of the data-pool
 
         Example:
-          juju config ceph-csi cephfs-storage-class-name-formatter="{cluster}-{namespace}-{storageclass}"
+          juju config ceph-csi cephfs-storage-class-name-formatter="cephfs-{namespace}-{pool}"
 
         The default is to use the storage class name
       type: string
@@ -141,6 +163,21 @@ config:
         https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
       type: string
 
+    ceph-xfs-storage-class-name-formatter:
+      default: "ceph-xfs"
+      description: |
+        Formatter for the ceph xfs storage class name
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-xfs-storage-class-name-formatter="ceph-xfs-{app}"
+
+        The default is to use the storage class name
+      type: string
+
     ceph-xfs-storage-class-parameters:
       default: "imageFeatures=layering"
       description: |
@@ -154,6 +191,21 @@ config:
         https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
       type: string
 
+    ceph-ext4-storage-class-name-formatter:
+      default: "ceph-ext4"
+      description: |
+        Formatter for the ceph ext4 storage class name
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}              - the name of the juju application
+          - {namespace}        - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-ext4-storage-class-name-formatter="ceph-ext4-{app}"
+
+        The default is to use the storage class name
+      type: string
+
     ceph-ext4-storage-class-parameters:
       default: "imageFeatures=layering"
       description: |
@@ -165,6 +217,36 @@ config:
 
         Optional parameters can be found in the ceph-csi documentation:
         https://github.com/ceph/ceph-csi/blob/devel/examples/rbd/storageclass.yaml
+      type: string
+
+    ceph-rbac-name-formatter:
+      default: "{name}"
+      description: |
+        Formatter for colliding kubernetes rbac resources
+
+        The formatter is used to create a unique name for the resource
+        when the name collides with an existing resource.
+        This is useful when deploying multiple ceph-csi charms.
+
+        This is a list of non-namespaced resources affected by this formatter:
+          - ClusterRole/cephfs-csi-nodeplugin
+          - ClusterRoleBinding/cephfs-csi-nodeplugin
+          - ClusterRole/cephfs-external-provisioner-runner
+          - ClusterRoleBinding/cephfs-external-provisioner-runner
+          - ClusterRole/rbd-csi-nodeplugin
+          - ClusterRoleBinding/rbd-csi-nodeplugin
+          - ClusterRole/rbd-external-provisioner-runner
+          - ClusterRoleBinding/rbd-csi-provisioner-role
+
+        The formatter is a string that can contain the following placeholders:
+          - {app}       - the name of the juju application
+          - {name}      - the name of the kubernetes resource
+          - {namespace} - the charm configured namespace
+
+        Example:
+          juju config ceph-csi ceph-rbac-name-formatter="{name}-{app}"
+
+        The default is to use the {name} of the resource
       type: string
 
     image-registry:
