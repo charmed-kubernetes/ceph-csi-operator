@@ -3,8 +3,8 @@ ops.manifest == 1.6.0
 jinja2
 pyyaml
 interface_ceph_client @ git+https://github.com/openstack/charm-ops-interface-ceph-client@d4d0cefc5e92edd28cdbf5d00e190d4498896418
-charms.reconciler == 0.0.0
-charms.contextual-status == 0.0.0
+charms.reconciler == 0.0.1
+charms.contextual-status == 0.0.1
 charmhelpers == 1.2.1
 setuptools == 69.5.1
 
