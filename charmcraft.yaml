@@ -22,8 +22,6 @@ parts:
   charm:
     plugin: charm
     build-packages: [git]
-    charm-python-packages:
-      - setuptools  # for jinja2
     prime:
       - upstream/**
 bases:

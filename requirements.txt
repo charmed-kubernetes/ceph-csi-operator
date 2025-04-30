@@ -6,7 +6,7 @@ interface_ceph_client @ git+https://github.com/openstack/charm-ops-interface-cep
 charms.reconciler == 0.0.1
 charms.contextual-status == 0.0.1
 charmhelpers == 1.2.1
-setuptools == 69.5.1
+setuptools == 79.0.1
 
 # require netifaces to prevent a dynamic apt install during interface_ceph_client -> charmhelpers import
 # https://github.com/juju/charm-helpers/blob/a72931f7324526e7f05221847437238517f38fa7/charmhelpers/contrib/network/ip.py#L37-L42
