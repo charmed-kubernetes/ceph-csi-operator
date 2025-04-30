@@ -20,6 +20,7 @@ from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
 
+import literals
 import utils
 from manifests_base import Manifests, SafeManifest
 from manifests_cephfs import CephFSManifests, CephStorageClass
@@ -32,16 +33,12 @@ logger = logging.getLogger(__name__)
 class CephCsiCharm(ops.CharmBase):
     """Charm the service."""
 
-    CEPH_CLIENT_RELATION = "ceph-client"
-    REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
-    DEFAULT_NAMESPACE = "default"
-
     stored = ops.StoredState()
 
     def __init__(self, *args: Any) -> None:
         """Setup even observers and initial storage values."""
         super().__init__(*args)
-        self.ceph_client = ceph_client.CephClientRequires(self, "ceph-client")
+        self.ceph_client = ceph_client.CephClientRequires(self, literals.CEPH_CLIENT_RELATION)
 
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
@@ -137,7 +134,7 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def _configured_ns(self) -> str:
         """Currently configured namespace."""
-        return str(self.config.get("namespace") or self.DEFAULT_NAMESPACE)
+        return str(self.config.get("namespace") or literals.DEFAULT_NAMESPACE)
 
     @property
     def _configured_drivername(self) -> str:
@@ -165,15 +162,16 @@ class CephCsiCharm(ops.CharmBase):
         """Return Ceph monitor hosts from ceph-client relation"""
         return self.ceph_data["mon_hosts"] or []
 
-    @status.on_error(ops.BlockedStatus("Failed to install ceph-common apt package."))
-    def install_ceph_common(self, event: ops.EventBase) -> None:
-        """Install ceph-common apt package"""
-        self.unit.status = ops.MaintenanceStatus("Ensuring ceph-common package")
-        latest = isinstance(event, (ops.InstallEvent, ops.UpgradeCharmEvent))
-        state = apt.PackageState.Latest if latest else apt.PackageState.Present
-        ceph = apt.DebianPackage.from_system("ceph-common")
-        ceph.ensure(state)
-        logger.info("Installing ceph-common to version: %s", ceph.fullversion)
+    @status.on_error(ops.BlockedStatus("Failed to install ceph apt packages."))
+    def install_ceph_packages(self, event: ops.EventBase) -> None:
+        """Install ceph deb packages"""
+        for package in literals.CEPH_PACKAGES:
+            self.unit.status = ops.MaintenanceStatus(f"Ensuring {package} package")
+            latest = isinstance(event, (ops.InstallEvent, ops.UpgradeCharmEvent))
+            state = apt.PackageState.Latest if latest else apt.PackageState.Present
+            ceph = apt.DebianPackage.from_system(package)
+            ceph.ensure(state)
+            logger.info("Installing %s to version: %s", package, ceph.fullversion)
 
     @property
     def provisioner_replicas(self) -> int:
@@ -197,9 +195,7 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def kubernetes_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
-        return {
-            "kubelet_dir": self.kubelet_dir,
-        }
+        return {"kubelet_dir": self.kubelet_dir}
 
     @cached_property
     def _client(self) -> Client:
@@ -246,7 +242,7 @@ class CephCsiCharm(ops.CharmBase):
 
         if self.config["cephfs-enable"]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephFS")
-            groups = set(str(self.config["cephfs-subvolumegroups"]).split())
+            groups = {literals.CEPHFS_SUBVOLUMEGROUP}
             for volume in utils.ls_ceph_fs(self.cli):
                 utils.ensure_subvolumegroups(self.cli, volume.name, groups)
         else:
@@ -316,7 +312,7 @@ class CephCsiCharm(ops.CharmBase):
         """
         self.unit.status = ops.MaintenanceStatus("Checking Relations")
         try:
-            relation = self.model.get_relation(self.CEPH_CLIENT_RELATION)
+            relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
         except ops.model.TooManyRelatedAppsError:
             status.add(ops.BlockedStatus("Multiple ceph-client relations"))
             raise status.ReconcilerError("Multiple ceph-client relations")
@@ -343,7 +339,7 @@ class CephCsiCharm(ops.CharmBase):
                 self._purge_all_manifests()
             return
 
-        self.install_ceph_common(event)
+        self.install_ceph_packages(event)
         self.check_kube_config()
         self.check_namespace()
         self.check_ceph_client()
@@ -356,7 +352,7 @@ class CephCsiCharm(ops.CharmBase):
 
     def request_ceph_pools(self) -> None:
         """Request creation of Ceph pools from the ceph-client relation"""
-        for pool_name in self.REQUIRED_CEPH_POOLS:
+        for pool_name in literals.REQUIRED_CEPH_POOLS:
             self.ceph_client.create_replicated_pool(name=pool_name)
 
     def request_ceph_permissions(self) -> None:
@@ -388,7 +384,7 @@ class CephCsiCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("Removing Kubernetes resources")
         for manifest in self.collector.manifests.values():
             self._purge_manifest(manifest)
-        ceph_pools = ", ".join(self.REQUIRED_CEPH_POOLS)
+        ceph_pools = ", ".join(literals.REQUIRED_CEPH_POOLS)
         logger.warning(
             "Ceph pools %s won't be removed. If you want to clean up pools manually,"
             "use `juju run ceph-mon/leader delete-pool`",

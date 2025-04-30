@@ -1,3 +1,4 @@
+import json
 import logging
 import unittest.mock as mock
 from textwrap import dedent
@@ -6,6 +7,7 @@ import pytest
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import ConfigMap
 
+import literals
 from manifests_config import CephConfig, CephCsiConfig, ConfigManifests
 
 
@@ -52,12 +54,21 @@ def test_ceph_csi_config_modeled(caplog):
         "fsid": "abcd",
         "mon_hosts": ["10.10.10.1", "10.10.10.2"],
     }
+    expected_config_json = [
+        {
+            "clusterID": manifest.config["fsid"],
+            "monitors": manifest.config["mon_hosts"],
+            "CephFS": {"subvolumeGroup": literals.CEPHFS_SUBVOLUMEGROUP},
+        }
+    ]
 
     expected = ConfigMap(
         metadata=ObjectMeta(
             name=ccc.NAME,
         ),
-        data={"config.json": '[{"clusterID": "abcd", "monitors": ["10.10.10.1", "10.10.10.2"]}]'},
+        data={
+            "config.json": json.dumps(expected_config_json, sort_keys=True),
+        },
     )
     assert ccc() == expected
     assert "Modelling configmap for ceph-csi-config." in caplog.text

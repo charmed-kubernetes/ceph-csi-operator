@@ -146,15 +146,6 @@ config:
         csi-cephfsplugin.
       type: string
 
-    cephfs-subvolumegroups:
-      default: "csi"
-      type: string
-      description: |
-        Subvolume groups to be ensured within the cephfs volume.
-        https://docs.ceph.com/en/reef/cephfs/fs-volumes/#fs-subvolume-groups
-
-        Declare subvolume groups separated by spaces.
-
     ceph-rbd-tolerations:
       default: ""
       description: |

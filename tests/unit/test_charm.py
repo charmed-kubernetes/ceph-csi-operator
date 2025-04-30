@@ -15,6 +15,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
 
+import literals
 from charm import CephCsiCharm
 from manifests_config import EncryptConfig
 
@@ -88,7 +89,7 @@ def reconcile_this(harness, method):
 def mocked_handlers():
     handler_names = [
         "_destroying",
-        "install_ceph_common",
+        "install_ceph_packages",
         "check_kube_config",
         "check_namespace",
         "check_ceph_client",
@@ -127,7 +128,7 @@ def test_set_leader(harness):
 def test_install(harness, mock_apt):
     """Test that on.install hook will call expected methods"""
     harness.begin()
-    with reconcile_this(harness, harness.charm.install_ceph_common):
+    with reconcile_this(harness, harness.charm.install_ceph_packages):
         harness.charm.on.install.emit()
 
     mock_apt.assert_called_once_with("ceph-common")
@@ -139,12 +140,12 @@ def test_install_pkg_missing(harness, mock_apt):
     mock_apt.side_effect = apt.PackageNotFoundError
 
     harness.begin()
-    with reconcile_this(harness, harness.charm.install_ceph_common):
+    with reconcile_this(harness, harness.charm.install_ceph_packages):
         harness.charm.on.install.emit()
 
     mock_apt.assert_called_once_with("ceph-common")
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Failed to install ceph-common apt package."
+    assert harness.charm.unit.status.message == "Failed to install ceph apt packages."
 
 
 @mock.patch("charm.KubeConfig.from_env", mock.MagicMock(side_effect=FileNotFoundError))
@@ -199,7 +200,7 @@ def test_check_ceph_client(harness):
     assert harness.charm.unit.status.message == "Missing relation: ceph-client"
 
     with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
-        rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        rel_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
 
     assert harness.charm.unit.status.name == "waiting"
     assert harness.charm.unit.status.message == "Ceph relation is missing data."
@@ -311,7 +312,7 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
     # add ceph-client relation
     reconciled = mock.MagicMock()
     with reconcile_this(harness, lambda _: reconciled):
-        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        relation_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
         harness.add_relation_unit(relation_id, "ceph-mon/0")
 
     assert create_replicated_pool.call_count == 2
