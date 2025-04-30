@@ -13,6 +13,7 @@ from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
 from ops.manifests import Addition, ManifestLabel
 
+import literals
 from manifests_base import AdjustNamespace, SafeManifest
 
 if TYPE_CHECKING:
@@ -115,8 +116,14 @@ class CephCsiConfig(Addition):
             return None
 
         log.info(f"Modelling configmap for {self.NAME}.")
-        config_json = [{"clusterID": fsid, "monitors": mon_hosts}]
-        data = {"config.json": json.dumps(config_json)}
+        config_json = [
+            {
+                "clusterID": fsid,
+                "monitors": mon_hosts,
+                "CephFS": {"subvolumeGroup": literals.CEPHFS_SUBVOLUMEGROUP},
+            }
+        ]
+        data = {"config.json": json.dumps(config_json, sort_keys=True)}
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
 
 

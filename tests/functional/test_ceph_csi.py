@@ -14,6 +14,7 @@ import pytest
 import pytest_asyncio
 from kubernetes import client, config, utils
 from pytest_operator.plugin import OpsTest
+
 from utils import render_j2_template, wait_for_pod
 
 logger = logging.getLogger(__name__)

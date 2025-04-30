@@ -22,8 +22,6 @@ parts:
   charm:
     plugin: charm
     build-packages: [git]
-    charm-python-packages:
-      - setuptools  # for jinja2
     prime:
       - upstream/**
 bases:
@@ -350,7 +348,7 @@ actions:
         type: string
         default: ""
         description: |
-          Space separated list of kubernetes resource types to filter scrubbing   
+          Space separated list of kubernetes resource types to filter scrubbing
   sync-resources:
     description: |
       Add kubernetes resources which should be created by this charm which aren't
@@ -391,4 +389,3 @@ requires:
   kubernetes-info:
     interface: kubernetes-info
     scope: container
-

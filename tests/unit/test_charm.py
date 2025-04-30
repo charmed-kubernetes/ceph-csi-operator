@@ -5,9 +5,7 @@
 """Collection of tests related to src/charm.py"""
 
 import contextlib
-import json
 import unittest.mock as mock
-from subprocess import SubprocessError
 
 import charms.operator_libs_linux.v0.apt as apt
 import ops
@@ -17,7 +15,8 @@ from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
 
-from charm import CephCsiCharm, CephFilesystem
+import literals
+from charm import CephCsiCharm
 from manifests_config import EncryptConfig
 
 
@@ -31,13 +30,6 @@ def harness():
 
 
 @pytest.fixture(autouse=True)
-def ceph_conf_directory(tmp_path):
-    with mock.patch("charm.ceph_config_dir") as mock_path:
-        mock_path.return_value = tmp_path / "ceph-conf"
-        yield mock_path
-
-
-@pytest.fixture(autouse=True)
 def mock_apt():
     with mock.patch(
         "charms.operator_libs_linux.v0.apt.DebianPackage.from_system", autospec=True
@@ -45,68 +37,9 @@ def mock_apt():
         yield mock_apt
 
 
-@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
-@mock.patch("charm.ceph_config_file")
-def test_write_ceph_cli_config(ceph_config_file, ceph_data, harness, ceph_conf_directory):
-    """Test writing of Ceph CLI config"""
-    harness.begin()
-    ceph_data.return_value = {"auth": "cephx", "mon_hosts": ["10.0.0.1", "10.0.0.2"]}
-    harness.charm.write_ceph_cli_config()
-    path = ceph_config_file.return_value
-    path.open.assert_called_once_with("w")
-    unit_name = harness.charm.unit.name.replace("/", "-")
-    with path.open() as fp:
-        lines = [
-            "[global]",
-            "auth cluster required = cephx",
-            "auth service required = cephx",
-            "auth client required = cephx",
-            f"keyring = {ceph_conf_directory.return_value}/$cluster.$name.keyring",
-            "mon host = 10.0.0.1 10.0.0.2",
-            "log to syslog = true",
-            "err to syslog = true",
-            "clog to syslog = true",
-            "mon cluster log to syslog = true",
-            "debug mon = 1/5",
-            "debug osd = 1/5",
-            "",
-            "[client]",
-            f"log file = /var/log/ceph/{unit_name}.log",
-            "",
-        ]
-        fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
-
-
-@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
-@mock.patch("charm.ceph_keyring_file")
-def test_write_ceph_cli_keyring(ceph_keyring_file, ceph_data, harness):
-    """Test writing of Ceph CLI keyring file"""
-    harness.begin()
-    ceph_data.return_value = {"key": "12345"}
-    harness.charm.write_ceph_cli_keyring()
-    ceph_keyring_file.return_value.open.assert_called_once_with("w")
-    with ceph_keyring_file.return_value.open() as fp:
-        lines = ["[client.ceph-csi]", "key = 12345", ""]
-        fp.write.assert_has_calls([mock.call(_l + "\n") for _l in lines])
-
-
-@mock.patch("charm.CephCsiCharm.write_ceph_cli_config")
-@mock.patch("charm.CephCsiCharm.write_ceph_cli_keyring")
-@mock.patch("charm.ceph_config_dir")
-def test_configure_ceph_cli(ceph_config_dir, keyring, config, harness):
-    """Test configuration of Ceph CLI"""
-    harness.begin()
-    harness.charm.configure_ceph_cli()
-    ceph_config_dir.return_value.mkdir.assert_called_once_with(
-        mode=0o700, parents=True, exist_ok=True
-    )
-    config.assert_called_once()
-    keyring.assert_called_once()
-
-
 @mock.patch("subprocess.check_output")
 @mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
-def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_directory):
+def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_file):
     """Test that ceph_context property returns properly formatted data."""
     fsid = "12345"
     key = "secret_key"
@@ -134,12 +67,12 @@ def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_directo
     }
 
     assert harness.charm.ceph_context == expected_context
-    conf = (ceph_conf_directory() / "ceph.conf").absolute().as_posix()
+    conf = ceph_conf_file.absolute().as_posix()
     check_output.assert_any_call(
         ["/usr/bin/ceph", "--conf", conf, "--user", "ceph-csi", "fsid"], timeout=60
     )
     check_output.assert_any_call(
-        ["/usr/bin/ceph", "--conf", conf, "--user", "ceph-csi", "fs", "ls", "-f", "json"],
+        ["/usr/bin/ceph", "--conf", conf, "--user", "ceph-csi", "--format", "json", "fs", "ls"],
         timeout=60,
     )
 
@@ -156,12 +89,11 @@ def reconcile_this(harness, method):
 def mocked_handlers():
     handler_names = [
         "_destroying",
-        "install_ceph_common",
+        "install_ceph_packages",
         "check_kube_config",
         "check_namespace",
         "check_ceph_client",
-        "configure_ceph_cli",
-        "enforce_cephfs_enabled",
+        "_cephfs_configure",
         "evaluate_manifests",
         "prevent_collisions",
         "install_manifests",
@@ -184,7 +116,7 @@ def test_set_leader(harness):
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
     with mocked_handlers() as handlers:
         handlers["_destroying"].return_value = False
-        handlers["enforce_cephfs_enabled"].return_value = False
+        handlers["_cephfs_configure"].return_value = False
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
     assert harness.charm.unit.status.message == "Ready"
@@ -196,7 +128,7 @@ def test_set_leader(harness):
 def test_install(harness, mock_apt):
     """Test that on.install hook will call expected methods"""
     harness.begin()
-    with reconcile_this(harness, harness.charm.install_ceph_common):
+    with reconcile_this(harness, harness.charm.install_ceph_packages):
         harness.charm.on.install.emit()
 
     mock_apt.assert_called_once_with("ceph-common")
@@ -208,12 +140,12 @@ def test_install_pkg_missing(harness, mock_apt):
     mock_apt.side_effect = apt.PackageNotFoundError
 
     harness.begin()
-    with reconcile_this(harness, harness.charm.install_ceph_common):
+    with reconcile_this(harness, harness.charm.install_ceph_packages):
         harness.charm.on.install.emit()
 
     mock_apt.assert_called_once_with("ceph-common")
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Failed to install ceph-common apt package."
+    assert harness.charm.unit.status.message == "Failed to install ceph apt packages."
 
 
 @mock.patch("charm.KubeConfig.from_env", mock.MagicMock(side_effect=FileNotFoundError))
@@ -255,7 +187,6 @@ def test_check_namespace(harness, lk_charm_client):
     assert harness.charm.unit.status.name == "active"
 
 
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 def test_check_ceph_client(harness):
     """Test that check_ceph_client sets expected unit states."""
 
@@ -269,7 +200,7 @@ def test_check_ceph_client(harness):
     assert harness.charm.unit.status.message == "Missing relation: ceph-client"
 
     with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
-        rel_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        rel_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
 
     assert harness.charm.unit.status.name == "waiting"
     assert harness.charm.unit.status.message == "Ceph relation is missing data."
@@ -381,7 +312,7 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
     # add ceph-client relation
     reconciled = mock.MagicMock()
     with reconcile_this(harness, lambda _: reconciled):
-        relation_id = harness.add_relation(CephCsiCharm.CEPH_CLIENT_RELATION, "ceph-mon")
+        relation_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
         harness.add_relation_unit(relation_id, "ceph-mon/0")
 
     assert create_replicated_pool.call_count == 2
@@ -413,7 +344,6 @@ def test_cleanup(_purge_manifest, harness, caplog):
     _purge_manifest.assert_called()
 
 
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
 def test_action_list_versions(harness):
     harness.begin()
 
@@ -427,9 +357,8 @@ def test_action_list_versions(harness):
     mock_event.set_results.assert_called_once_with(expected_results)
 
 
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
+@mock.patch("utils.fsid", mock.MagicMock(return_value="12345"))
+@mock.patch("utils.ls_ceph_fs", mock.MagicMock(return_value=[]))
 def test_action_manifest_resources(harness, lk_client, api_error_klass):
     harness.begin_with_initial_hooks()
     not_found = api_error_klass()
@@ -469,9 +398,8 @@ def test_action_manifest_resources(harness, lk_client, api_error_klass):
     assert action.results == expected_results
 
 
-@mock.patch("charm.CephCsiCharm.configure_ceph_cli", mock.MagicMock())
-@mock.patch("charm.CephCsiCharm.get_ceph_fsid", mock.MagicMock(return_value="12345"))
-@mock.patch("charm.CephCsiCharm.get_ceph_fs_list", mock.MagicMock(return_value={}))
+@mock.patch("utils.fsid", mock.MagicMock(return_value="12345"))
+@mock.patch("utils.ls_ceph_fs", mock.MagicMock(return_value=[]))
 def test_action_sync_resources_install_failure(harness, lk_client, api_error_klass):
     harness.begin_with_initial_hooks()
     not_found = api_error_klass()
@@ -517,36 +445,6 @@ def test_action_delete_storage_class(harness, lk_client):
     lk_client.delete.assert_called_once_with(StorageClass, name="cephfs")
 
 
-@mock.patch("charm.CephCsiCharm.ceph_cli", mock.MagicMock(side_effect=SubprocessError))
-def test_failed_cli_fsid(harness):
-    harness.begin()
-    assert harness.charm.get_ceph_fsid() == ""
-
-
-@pytest.mark.parametrize("failure", [SubprocessError, lambda *_: "invalid"])
-def test_failed_cli_fs_list(harness, failure):
-    harness.begin()
-    with mock.patch("charm.CephCsiCharm.ceph_cli", side_effect=failure):
-        assert harness.charm.get_ceph_fs_list() == []
-
-
-def test_cli_fsdata(request, harness):
-    harness.begin()
-    fs_name = request.node.name
-    fs_data = [
-        {
-            "name": f"{fs_name}-alt",
-            "metadata_pool": f"{fs_name}-alt_metadata",
-            "metadata_pool_id": 5,
-            "data_pool_ids": [4],
-            "data_pools": [f"{fs_name}-alt_data"],
-        }
-    ]
-    pools = json.dumps(fs_data)
-    with mock.patch("charm.CephCsiCharm.ceph_cli", return_value=pools):
-        assert harness.charm.get_ceph_fs_list() == [CephFilesystem(**fs) for fs in fs_data]
-
-
 def test_kubelet_dir(harness):
     harness.begin()
     data = {"kubelet-root-dir": "/var/snap/k8s/common/var/lib/kubelet"}
@@ -562,7 +460,7 @@ def test_kubelet_dir(harness):
 def test_enforce_cephfs_enabled(mock_purge, harness):
     harness.begin()
 
-    with reconcile_this(harness, lambda _: harness.charm.enforce_cephfs_enabled()):
+    with reconcile_this(harness, lambda _: harness.charm._cephfs_configure()):
         # disabled on leader, purge
         harness.disable_hooks()
         harness.set_leader(True)
