@@ -146,6 +146,15 @@ config:
         csi-cephfsplugin.
       type: string
 
+    cephfs-subvolumegroups:
+      default: "csi"
+      type: string
+      description: |
+        Subvolume groups to be ensured within the cephfs volume.
+        https://docs.ceph.com/en/reef/cephfs/fs-volumes/#fs-subvolume-groups
+
+        Declare subvolume groups separated by spaces.
+
     ceph-rbd-tolerations:
       default: ""
       description: |
@@ -350,7 +359,7 @@ actions:
         type: string
         default: ""
         description: |
-          Space separated list of kubernetes resource types to filter scrubbing   
+          Space separated list of kubernetes resource types to filter scrubbing
   sync-resources:
     description: |
       Add kubernetes resources which should be created by this charm which aren't
@@ -391,4 +400,3 @@ requires:
   kubernetes-info:
     interface: kubernetes-info
     scope: container
-

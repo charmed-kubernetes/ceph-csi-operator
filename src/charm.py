@@ -3,12 +3,10 @@
 # See LICENSE file for licensing details.
 """Dispatch logic for the ceph-csi storage charm."""
 
-import configparser
+
 import json
 import logging
-import subprocess
-from functools import cached_property, lru_cache
-from pathlib import Path
+from functools import cached_property
 from typing import Any, Dict, List, Optional, cast
 
 import charms.contextual_status as status
@@ -22,24 +20,13 @@ from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
 
+import utils
 from manifests_base import Manifests, SafeManifest
-from manifests_cephfs import CephFilesystem, CephFSManifests, CephStorageClass
+from manifests_cephfs import CephFSManifests, CephStorageClass
 from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
 logger = logging.getLogger(__name__)
-
-
-def ceph_config_dir() -> Path:
-    return Path.cwd() / "ceph-conf"
-
-
-def ceph_config_file() -> Path:
-    return ceph_config_dir() / "ceph.conf"
-
-
-def ceph_keyring_file(app_name: str) -> Path:
-    return ceph_config_dir() / f"ceph.client.{app_name}.keyring"
 
 
 class CephCsiCharm(ops.CharmBase):
@@ -59,6 +46,7 @@ class CephCsiCharm(ops.CharmBase):
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
         )
+        self.cli = utils.CephCLI(self)
         self.reconciler = Reconciler(self, self.reconcile)
 
         self.framework.observe(self.on.list_versions_action, self._list_versions)
@@ -187,69 +175,6 @@ class CephCsiCharm(ops.CharmBase):
         ceph.ensure(state)
         logger.info("Installing ceph-common to version: %s", ceph.fullversion)
 
-    def write_ceph_cli_config(self) -> None:
-        """Write Ceph CLI .conf file"""
-        config = configparser.ConfigParser()
-        unit_name = self.unit.name.replace("/", "-")
-        config["global"] = {
-            "auth cluster required": self.auth or "",
-            "auth service required": self.auth or "",
-            "auth client required": self.auth or "",
-            "keyring": f"{ceph_config_dir()}/$cluster.$name.keyring",
-            "mon host": " ".join(self.mon_hosts),
-            "log to syslog": "true",
-            "err to syslog": "true",
-            "clog to syslog": "true",
-            "mon cluster log to syslog": "true",
-            "debug mon": "1/5",
-            "debug osd": "1/5",
-        }
-        config["client"] = {"log file": f"/var/log/ceph/{unit_name}.log"}
-
-        with ceph_config_file().open("w") as fp:
-            config.write(fp)
-
-    def write_ceph_cli_keyring(self) -> None:
-        """Write Ceph CLI keyring file"""
-        config = configparser.ConfigParser()
-        config[f"client.{self.app.name}"] = {"key": self.key or ""}
-        with ceph_keyring_file(self.app.name).open("w") as fp:
-            config.write(fp)
-
-    def configure_ceph_cli(self) -> None:
-        """Configure Ceph CLI"""
-        ceph_config_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.write_ceph_cli_config()
-        self.write_ceph_cli_keyring()
-
-    def ceph_cli(self, *args: str, timeout: int = 60) -> str:
-        """Run Ceph CLI command"""
-        conf = ceph_config_file().absolute().as_posix()
-        cmd = ["/usr/bin/ceph", "--conf", conf, "--user", self.app.name, *args]
-        return subprocess.check_output(cmd, timeout=timeout).decode("UTF-8")
-
-    @lru_cache(maxsize=None)
-    def get_ceph_fsid(self) -> str:
-        """Get the Ceph FSID (cluster ID)"""
-        try:
-            return self.ceph_cli("fsid").strip()
-        except subprocess.SubprocessError:
-            logger.error("get_ceph_fsid: Failed to get CephFS ID, reporting as empty string")
-            return ""
-
-    @lru_cache(maxsize=None)
-    def get_ceph_fs_list(self) -> List[CephFilesystem]:
-        """Get a list of CephFS names and list of associated pools."""
-        try:
-            data = json.loads(self.ceph_cli("fs", "ls", "-f", "json"))
-        except (subprocess.SubprocessError, ValueError) as e:
-            logger.error(
-                "get_ceph_fs_list: Failed to find CephFS name, reporting as None, error: %s", e
-            )
-            return []
-
-        return [CephFilesystem(**fs) for fs in data]
-
     @property
     def provisioner_replicas(self) -> int:
         """Get the number of csi-*plugin-provisioner replicas."""
@@ -286,13 +211,13 @@ class CephCsiCharm(ops.CharmBase):
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
             "auth": self.auth,
-            "fsid": self.get_ceph_fsid(),
+            "fsid": utils.fsid(self.cli),
             "kubernetes_key": self.key,
             "mon_hosts": self.mon_hosts,
             "user": self.app.name,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
-            CephStorageClass.FILESYSTEM_LISTING: self.get_ceph_fs_list(),
+            CephStorageClass.FILESYSTEM_LISTING: utils.ls_ceph_fs(self.cli),
         }
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
@@ -313,10 +238,18 @@ class CephCsiCharm(ops.CharmBase):
                 status.add(ops.WaitingStatus("Waiting for Kubernetes API"))
                 raise status.ReconcilerError("Waiting for Kubernetes API")
 
-    def enforce_cephfs_enabled(self) -> None:
+    @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
+    def _cephfs_configure(self) -> None:
         """Determine if CephFS should be enabled or disabled."""
-        disabled = self.config.get("cephfs-enable") is False
-        if disabled and self.unit.is_leader():
+        if not self.unit.is_leader():
+            return
+
+        if self.config["cephfs-enable"]:
+            self.unit.status = ops.MaintenanceStatus("Enabling CephFS")
+            groups = set(str(self.config["cephfs-subvolumegroups"]).split())
+            for volume in utils.ls_ceph_fs(self.cli):
+                utils.ensure_subvolumegroups(self.cli, volume.name, groups)
+        else:
             self.unit.status = ops.MaintenanceStatus("Disabling CephFS")
             self._purge_manifest_by_name("cephfs")
 
@@ -414,8 +347,8 @@ class CephCsiCharm(ops.CharmBase):
         self.check_kube_config()
         self.check_namespace()
         self.check_ceph_client()
-        self.configure_ceph_cli()
-        self.enforce_cephfs_enabled()
+        self.cli.configure()
+        self._cephfs_configure()
         hash = self.evaluate_manifests()
         self.prevent_collisions(event)
         self.install_manifests(config_hash=hash)

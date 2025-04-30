@@ -44,7 +44,7 @@ applications:
       provisioner-replicas: 1
       namespace: {{ namespace }}
       ceph-rbac-name-formatter: '{name}-formatter'
-      release: {{ release }}
+      release: "{{ release }}"
 
   # Secondary Ceph Cluster
   ceph-fs-alt:
@@ -75,7 +75,7 @@ applications:
     # model.  It's used in test_duplicate_ceph_csi
     charm: {{ charm }}
     options:
-      release: {{ release }}
+      release: "{{ release }}"
       provisioner-replicas: 1
       namespace: {{ namespace }}
       csidriver-name-formatter: 'alt.{name}'
