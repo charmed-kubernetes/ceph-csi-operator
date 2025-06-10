@@ -241,6 +241,20 @@ config:
         The default is to use the {name} of the resource
       type: string
 
+    create-namespace:
+      default: false
+      description: |
+        Whether or not the charm should create the namespace specified in the
+        `namespace` configuration option.
+
+        If set to true, the charm will create the namespace if it does not exist.
+        If set to false, the charm will not create the namespace and will expect
+        it to be created by the user.
+
+        NOTE: Can only be specified on deployment since some
+        attributes of kubernetes resources are non-modifiable.
+      type: boolean
+
     image-registry:
       type: string
       default: "rocks.canonical.com/cdk"
