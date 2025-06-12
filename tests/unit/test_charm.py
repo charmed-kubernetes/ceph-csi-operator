@@ -159,26 +159,76 @@ def test_check_kubeconfig(harness):
     assert harness.charm.unit.status.message == "Waiting for kubeconfig"
 
 
-def test_check_namespace(harness, lk_charm_client):
+def test_check_namespace_creation_allowed(harness, lk_charm_client):
+    harness.set_leader(True)
+    harness.update_config({"create-namespace": True})
+    harness.begin()
+
+    not_found = ApiError(response=mock.MagicMock())
+    duplicate = ApiError(response=mock.MagicMock())
+    error = ApiError(response=mock.MagicMock())
+
+    not_found.status.code = 404
+    not_found.status.message = "not found"
+
+    duplicate.status.code = 409
+    duplicate.status.message = "duplicate found"
+
+    error.status.code = 503
+    error.status.message = "service unavailable"
+
+    # first return a 404 to force creation of the namespace
+    lk_charm_client.get.side_effect = not_found
+
+    # then simulate a successful creation
+    lk_charm_client.create.side_effect = None
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
+    assert harness.charm.unit.status.name == "active"
+
+    # now a duplicate to simulate the namespace already existing
+    lk_charm_client.create.side_effect = duplicate
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
+    assert harness.charm.unit.status.name == "active"
+
+    # now an error to simulate the namespace creation failing
+    lk_charm_client.create.side_effect = error
+    with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
+        harness.charm.on.install.emit()
+    assert harness.charm.unit.status.name == "waiting"
+
+
+@pytest.mark.parametrize("leadership", [True, False])
+def test_check_namespace(harness, leadership, lk_charm_client):
+    harness.set_leader(leadership)
     harness.begin()
 
     api_error = ApiError(response=mock.MagicMock())
 
     # should be blocked if the ns doesn't exist
+    api_error.status.code = 404
     api_error.status.message = "not found"
     lk_charm_client.get.side_effect = api_error
 
     with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
         harness.charm.on.install.emit()
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Missing namespace 'default'"
+    if leadership:
+        assert harness.charm.unit.status.name == "blocked"
+        assert harness.charm.unit.status.message == "Missing namespace 'default'"
+    else:
+        # should be waiting if not a leader
+        assert harness.charm.unit.status.name == "waiting"
+        assert harness.charm.unit.status.message == "Waiting for namespace 'default'"
 
     # should be in waiting if the k8s api isn't ready
-    api_error.status.message = "something else happened"
+    api_error.status.code = 500
+    api_error.status.message = "Internal Server Error"
     lk_charm_client.get.side_effect = api_error
     with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
         harness.charm.on.install.emit()
     assert harness.charm.unit.status.name == "waiting"
+    assert harness.charm.unit.status.message == "Waiting for Kubernetes API"
 
     # should be true if no api errors
     lk_charm_client.get.side_effect = None
