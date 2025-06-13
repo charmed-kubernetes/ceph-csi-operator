@@ -7,33 +7,41 @@ from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
 
 from manifests_base import CSIDriverAdjustments
-from manifests_rbd import CephStorageClass, RBDManifests, StorageSecret
+from manifests_rbd import CephRBDSecret, CephStorageClass, RBDManifests
 
 
 def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
-    ss = StorageSecret(manifest)
-    manifest.config = {}
+    manifest.name = "rbd"
+    manifest.purging = False
+    manifest.config = {"enabled": False}
+
+    ss = CephRBDSecret(manifest)
     assert ss() is None
-    assert "RBD is missing required secret item: 'user'" in caplog.text
+    assert "Ignore Secret from " in caplog.text
 
     caplog.clear()
-    manifest.config = {"user": "abcd"}
+    manifest.config = {"enabled": True}
     assert ss() is None
-    assert "RBD is missing required secret item: 'kubernetes_key'" in caplog.text
+    assert "rbd is missing required secret item: 'user'" in caplog.text
 
     caplog.clear()
-    manifest.config = {"user": "abcd", "kubernetes_key": "123"}
+    manifest.config = {"enabled": True, "user": "abcd"}
+    assert ss() is None
+    assert "rbd is missing required secret item: 'kubernetes_key'" in caplog.text
+
+    caplog.clear()
+    manifest.config = {"enabled": True, "user": "abcd", "kubernetes_key": "123"}
     expected = Secret(
-        metadata=ObjectMeta(name=StorageSecret.SECRET_NAME),
+        metadata=ObjectMeta(name=CephRBDSecret.NAME),
         stringData={
             "userID": "abcd",
             "userKey": "123",
         },
     )
     assert ss() == expected
-    assert "Modelling secret data for rbd storage." in caplog.text
+    assert "Modelling secret data for rbd." in caplog.text
 
 
 @pytest.mark.parametrize("fs_type", ["xfs", "ext4"])
@@ -49,6 +57,14 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
     }
     csc = CephStorageClass(manifest, f"ceph-{fs_type}")
 
+    assert csc() is None
+    assert (
+        f"Skipping Ceph {fs_type.capitalize()} storage class creation since it's disabled"
+        in caplog.text
+    )
+
+    manifest.config["enabled"] = True
+    caplog.clear()
     assert csc() is None
     assert f"Ceph {fs_type.capitalize()} is missing required storage item: 'fsid'" in caplog.text
 
@@ -83,12 +99,12 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
         provisioner=RBDManifests.DRIVER_NAME,
         parameters={
             "clusterID": "abcd",
-            "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/controller-expand-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": alt_ns,
             "csi.storage.k8s.io/fstype": fs_type,
-            "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/node-stage-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
-            "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/provisioner-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
             "pool": f"{fs_type}-pool",
             "extra-parameter": "value",
@@ -125,11 +141,17 @@ def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = RBDManifests(charm)
+    assert manifests.evaluate() is None
+    assert "Skipping CephRBD evaluation since it's disabled" in caplog.text
+
+    charm.config = {"ceph-rbd-enable": True}
     assert (
         manifests.evaluate()
         == "RBD manifests require the definition of 'ceph-rbac-name-formatter'"
     )
-    charm.config = {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+    charm.config.update(
+        {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+    )
 
     assert manifests.evaluate() == "RBD manifests require the definition of 'fsid'"
 

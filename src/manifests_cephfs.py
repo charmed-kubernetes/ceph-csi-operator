@@ -7,10 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
-from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel
-from ops.manifests.manipulations import Subtraction
+from ops.manifests import ConfigRegistry, ManifestLabel
 
 from manifests_base import (
     AdjustNamespace,
@@ -19,8 +17,10 @@ from manifests_base import (
     CSIDriverAdjustments,
     ProvisionerAdjustments,
     RbacAdjustments,
+    RemoveResource,
     SafeManifest,
     StorageClassFactory,
+    StorageSecret,
 )
 
 if TYPE_CHECKING:
@@ -51,35 +51,14 @@ class CephStorageClassParameters:
     data_pool: str
 
 
-class StorageSecret(Addition):
+class CephFSSecret(StorageSecret):
     """Create secret for the deployment."""
 
-    SECRET_NAME = "csi-cephfs-secret"
-
+    NAME = "csi-cephfs-secret"
     REQUIRED_CONFIG = {
         "user": ["userID", "adminID"],
         "kubernetes_key": ["userKey", "adminKey"],
     }
-
-    def __call__(self) -> Optional[AnyResource]:
-        """Craft the secrets object for the deployment."""
-        if not self.manifests.config["enabled"]:
-            log.info("Ignore Cephfs Storage Secrets")
-            return None
-
-        secret_config = {}
-        for k, keys in self.REQUIRED_CONFIG.items():
-            for secret_key in keys:
-                if value := self.manifests.config.get(k):
-                    secret_config[secret_key] = value
-                else:
-                    log.error(f"Cephfs is missing required secret item: '{k}'")
-                    return None
-
-        log.info("Modelling secret data for cephfs storage.")
-        return Secret.from_dict(
-            dict(metadata=dict(name=self.SECRET_NAME), stringData=secret_config)
-        )
 
 
 class CephStorageClass(StorageClassFactory):
@@ -101,11 +80,11 @@ class CephStorageClass(StorageClassFactory):
         parameters = {
             "clusterID": param.cluster_id,
             "fsName": param.filesystem_name,
-            "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/controller-expand-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": ns,
-            "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/provisioner-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
-            "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/node-stage-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
             "pool": param.data_pool,
         }
@@ -187,7 +166,6 @@ class CephStorageClass(StorageClassFactory):
             return [StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))]
 
         if not self.manifests.config.get("enabled"):
-            # If cephfs is not enabled, we cannot add any storage classes
             log.info("Skipping CephFS storage class creation since it's disabled")
             return []
 
@@ -215,14 +193,6 @@ class FSProvAdjustments(ProvisionerAdjustments):
         return CephToleration.from_space_separated(cfg), False
 
 
-class RemoveCephFS(Subtraction):
-    """Remove all Cephfs resources when disabled."""
-
-    def __call__(self, _obj: AnyResource) -> bool:
-        """Remove this obj if cephfs is not enabled."""
-        return not self.manifests.config["enabled"]
-
-
 class CephFSManifests(SafeManifest):
     """Deployment Specific details for the cephfs.csi.ceph.com driver."""
 
@@ -234,13 +204,13 @@ class CephFSManifests(SafeManifest):
             charm.model,
             "upstream/cephfs",
             [
-                StorageSecret(self),
+                CephFSSecret(self),
                 ConfigRegistry(self),
                 FSProvAdjustments(self),
                 CephStorageClass(self, STORAGE_TYPE),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
-                RemoveCephFS(self),
+                RemoveResource(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-cephfsplugin-provisioner", "cephfsplugin-provisioner"
@@ -270,7 +240,7 @@ class CephFSManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
-        config["release"] = config.pop("release", None)
+        config["release"] = config.get("release", None)
         config["enabled"] = config.get("cephfs-enable", None)
         config["namespace"] = self.charm.stored.namespace
         config["csidriver-name-formatter"] = self.charm.stored.drivername
@@ -282,7 +252,7 @@ class CephFSManifests(SafeManifest):
             log.info("Skipping CephFS evaluation since it's disabled")
             return None
 
-        props = StorageSecret.REQUIRED_CONFIG.keys() | RbacAdjustments.REQUIRED_CONFIG
+        props = CephFSSecret.REQUIRED_CONFIG.keys() | RbacAdjustments.REQUIRED_CONFIG
         for prop in sorted(props):
             value = self.config.get(prop)
             if not value:
