@@ -117,39 +117,12 @@ def test_set_leader(harness):
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
     with mocked_handlers() as handlers:
         handlers["_destroying"].return_value = False
-        handlers["_cephfs_enabled"].return_value = False
-        handlers["_ceph_rbd_enabled"].return_value = True
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
     assert harness.charm.unit.status.message == "Ready"
     assert harness.charm.reconciler.stored.reconciled
     not_called = {name: h for name, h in handlers.items() if not h.called}
     assert not_called == {}
-
-
-def test_no_provisioner_enabled(harness):
-    """Test emitting the set_leader hook when no provisioner is enabled.
-
-    Args:
-        harness: the harness under test
-    """
-    harness.begin()
-    harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
-    with mocked_handlers() as handlers:
-        handlers["_destroying"].return_value = False
-        handlers["_cephfs_enabled"].return_value = False
-        handlers["_ceph_rbd_enabled"].return_value = False
-        harness.set_leader(True)
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Neither ceph-rbd nor cephfs is enabled."
-    assert not harness.charm.reconciler.stored.reconciled
-    not_called = {name for name, h in handlers.items() if not h.called}
-    assert {
-        "evaluate_manifests",
-        "prevent_collisions",
-        "install_manifests",
-        "_update_status",
-    } == not_called
 
 
 def test_install(harness, mock_apt):
@@ -550,8 +523,9 @@ def test_prevent_collisions(ceph_context, harness, caplog):
     assert "   ConfigMap/ceph-csi-encryption-kms-config" in caplog.messages
 
 
+@pytest.fixture()
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
-def test_update_status_waiting(ceph_context, harness):
+def update_status_charm(ceph_context, harness):
     harness.set_leader(True)
     harness.begin()
     harness.charm.reconciler.stored.reconciled = True
@@ -566,24 +540,44 @@ def test_update_status_waiting(ceph_context, harness):
         "enable_host_network": "false",
         "fsname": None,
     }
-    with mock.patch.object(harness.charm, "collector") as mock_collector:
+    return harness.charm
+
+
+def test_update_status_no_provider(harness, update_status_charm):
+    """Test that update_status emits blocked status if no provider is enabled."""
+    harness.disable_hooks()
+    harness.update_config({"cephfs-enable": False, "ceph-rbd-enable": False})
+    harness.enable_hooks()
+    update_status_charm.on.update_status.emit()
+    assert update_status_charm.unit.status.name == "blocked"
+    assert update_status_charm.unit.status.message == "Neither ceph-rbd nor cephfs is enabled."
+
+
+def test_update_status_unready(update_status_charm):
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_collector.unready = ["not-ready"]
-        harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "waiting"
-    assert harness.charm.unit.status.message == "not-ready"
+        update_status_charm.on.update_status.emit()
+    assert update_status_charm.unit.status.name == "waiting"
+    assert update_status_charm.unit.status.message == "not-ready"
 
-    with mock.patch.object(harness.charm, "collector") as mock_collector:
+
+def test_update_status_changed_namespace(update_status_charm):
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_collector.unready = []
-        harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Namespace cannot be changed after deployment"
+        update_status_charm.on.update_status.emit()
+    assert update_status_charm.unit.status.name == "blocked"
+    assert (
+        update_status_charm.unit.status.message == "Namespace cannot be changed after deployment"
+    )
 
-    harness.charm.stored.namespace = "default"
-    with mock.patch.object(harness.charm, "collector") as mock_collector:
+
+def test_update_status_ready(update_status_charm):
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_collector.unready = []
         mock_collector.short_version = "short-version"
         mock_collector.long_version = "long-version"
-        harness.charm.on.update_status.emit()
-    assert harness.charm.unit.status.name == "active"
-    assert harness.charm.app._backend._workload_version == "short-version"
-    assert harness.charm.app.status.message == "long-version"
+        update_status_charm.on.update_status.emit()
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"

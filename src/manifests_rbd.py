@@ -162,6 +162,10 @@ class RBDManifests(SafeManifest):
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
+        if not self.config.get("enabled"):
+            log.info("Skipping CephRBD evaluation since it's disabled")
+            return None
+
         props = (
             CephRBDSecret.REQUIRED_CONFIG.keys()
             | CephStorageClass.REQUIRED_CONFIG

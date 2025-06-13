@@ -240,7 +240,7 @@ class CephFSManifests(SafeManifest):
             if value == "" or value is None:
                 del config[key]
 
-        config["release"] = config.pop("release", None)
+        config["release"] = config.get("release", None)
         config["enabled"] = config.get("cephfs-enable", None)
         config["namespace"] = self.charm.stored.namespace
         config["csidriver-name-formatter"] = self.charm.stored.drivername

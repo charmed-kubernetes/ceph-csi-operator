@@ -44,6 +44,13 @@ class StorageSecret(Addition):
     def __call__(self) -> Optional[AnyResource]:
         """Craft the secrets object for the deployment."""
         manifest = self.manifests.name
+
+        if cast(SafeManifest, self.manifests).purging:
+            # If we are purging, we may not be able to create any storage classes
+            # Just return a fake storage class to satisfy delete_manifests method
+            # which will look up all storage classes installed by this app/manifest
+            return Secret.from_dict(dict(metadata=dict(name=self.NAME)))
+
         if not self.manifests.config["enabled"]:
             log.info("Ignore Secret from %s", manifest)
             return None
@@ -370,8 +377,14 @@ class CSIDriverAdjustments(Patch):
 
 
 class RemoveResource(Subtraction):
-    """Remove all resources when disabled."""
+    """Remove all resources when not purging and not enabled."""
 
     def __call__(self, _obj: AnyResource) -> bool:
         """Remove this obj if manifest is not enabled."""
-        return not self.manifests.config["enabled"]
+        purging = cast(SafeManifest, self.manifests).purging
+        enabled = self.manifests.config["enabled"]
+        if purging:
+            log.info("Purging, removing resource %s", _obj)
+        elif not enabled:
+            log.info("Disabled, skipping resource %s", _obj)
+        return not purging and not enabled

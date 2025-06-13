@@ -107,8 +107,11 @@ class CephCsiCharm(ops.CharmBase):
             event.set_results({"result": f"Successfully deleted StorageClass/{storage_class}"})
 
     def _update_status(self) -> None:
-        unready = self.collector.unready
-        if unready:
+        if not (self.config["ceph-rbd-enable"] or self.config["cephfs-enable"]):
+            msg = "Neither ceph-rbd nor cephfs is enabled."
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+        elif unready := self.collector.unready:
             status.add(ops.WaitingStatus(", ".join(unready)))
             raise status.ReconcilerError("Waiting for deployment")
         elif self.stored.namespace != self._configured_ns:
@@ -235,21 +238,20 @@ class CephCsiCharm(ops.CharmBase):
                 raise status.ReconcilerError("Waiting for Kubernetes API")
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
-    def _ceph_rbd_enabled(self) -> bool:
+    def _ceph_rbd_enabled(self) -> None:
         """Determine if CephRBD should be enabled or disabled."""
 
-        if enabled := bool(self.config["ceph-rbd-enable"]):
+        if self.config["ceph-rbd-enable"]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephRBD")
         else:
             self.unit.status = ops.MaintenanceStatus("Disabling CephRBD")
             if self.unit.is_leader():
                 self._purge_manifest_by_name("rbd")
-        return enabled
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
-    def _cephfs_enabled(self) -> bool:
+    def _cephfs_enabled(self) -> None:
         """Determine if CephFS should be enabled or disabled."""
-        if enabled := bool(self.config["cephfs-enable"]):
+        if self.config["cephfs-enable"]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephFS")
             groups = {literals.CEPHFS_SUBVOLUMEGROUP}
             for volume in utils.ls_ceph_fs(self.cli):
@@ -258,7 +260,6 @@ class CephCsiCharm(ops.CharmBase):
             self.unit.status = ops.MaintenanceStatus("Disabling CephFS")
             if self.unit.is_leader():
                 self._purge_manifest_by_name("cephfs")
-        return enabled
 
     def prevent_collisions(self, event: ops.EventBase) -> None:
         """Prevent manifest collisions."""
@@ -355,15 +356,12 @@ class CephCsiCharm(ops.CharmBase):
         self.check_namespace()
         self.check_ceph_client()
         self.cli.configure()
-        if self._cephfs_enabled() or self._ceph_rbd_enabled():
-            hash = self.evaluate_manifests()
-            self.prevent_collisions(event)
-            self.install_manifests(config_hash=hash)
-            self._update_status()
-        else:
-            msg = "Neither ceph-rbd nor cephfs is enabled."
-            status.add(ops.BlockedStatus(msg))
-            raise status.ReconcilerError(msg)
+        self._ceph_rbd_enabled()
+        self._cephfs_enabled()
+        hash = self.evaluate_manifests()
+        self.prevent_collisions(event)
+        self.install_manifests(config_hash=hash)
+        self._update_status()
 
     def request_ceph_pools(self) -> None:
         """Request creation of Ceph pools from the ceph-client relation"""

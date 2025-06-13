@@ -45,8 +45,10 @@ def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     manifest.name = "cephfs"
-    ss = CephFSSecret(manifest)
+    manifest.purging = False
     manifest.config = {"enabled": False}
+
+    ss = CephFSSecret(manifest)
     assert ss() is None
     assert "Ignore Secret from " in caplog.text
 

@@ -14,8 +14,10 @@ def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
     manifest.name = "rbd"
-    ss = CephRBDSecret(manifest)
+    manifest.purging = False
     manifest.config = {"enabled": False}
+
+    ss = CephRBDSecret(manifest)
     assert ss() is None
     assert "Ignore Secret from " in caplog.text
 
@@ -139,11 +141,17 @@ def test_manifest_evaluation(caplog):
     caplog.set_level(logging.INFO)
     charm = mock.MagicMock()
     manifests = RBDManifests(charm)
+    assert manifests.evaluate() is None
+    assert "Skipping CephRBD evaluation since it's disabled" in caplog.text
+
+    charm.config = {"ceph-rbd-enable": True}
     assert (
         manifests.evaluate()
         == "RBD manifests require the definition of 'ceph-rbac-name-formatter'"
     )
-    charm.config = {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+    charm.config.update(
+        {"user": "cephx", "ceph-rbac-name-formatter": "{name}", "kubernetes_key": "123"}
+    )
 
     assert manifests.evaluate() == "RBD manifests require the definition of 'fsid'"
 
