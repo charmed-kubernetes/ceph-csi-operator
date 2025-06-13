@@ -93,7 +93,8 @@ def mocked_handlers():
         "check_kube_config",
         "check_namespace",
         "check_ceph_client",
-        "_cephfs_configure",
+        "_cephfs_enabled",
+        "_ceph_rbd_enabled",
         "evaluate_manifests",
         "prevent_collisions",
         "install_manifests",
@@ -116,13 +117,39 @@ def test_set_leader(harness):
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
     with mocked_handlers() as handlers:
         handlers["_destroying"].return_value = False
-        handlers["_cephfs_configure"].return_value = False
+        handlers["_cephfs_enabled"].return_value = False
+        handlers["_ceph_rbd_enabled"].return_value = True
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
     assert harness.charm.unit.status.message == "Ready"
     assert harness.charm.reconciler.stored.reconciled
     not_called = {name: h for name, h in handlers.items() if not h.called}
     assert not_called == {}
+
+
+def test_no_provisioner_enabled(harness):
+    """Test emitting the set_leader hook when no provisioner is enabled.
+
+    Args:
+        harness: the harness under test
+    """
+    harness.begin()
+    harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
+    with mocked_handlers() as handlers:
+        handlers["_destroying"].return_value = False
+        handlers["_cephfs_enabled"].return_value = False
+        handlers["_ceph_rbd_enabled"].return_value = False
+        harness.set_leader(True)
+    assert harness.charm.unit.status.name == "blocked"
+    assert harness.charm.unit.status.message == "Neither ceph-rbd nor cephfs is enabled."
+    assert not harness.charm.reconciler.stored.reconciled
+    not_called = {name for name, h in handlers.items() if not h.called}
+    assert {
+        "evaluate_manifests",
+        "prevent_collisions",
+        "install_manifests",
+        "_update_status",
+    } == not_called
 
 
 def test_install(harness, mock_apt):
@@ -457,28 +484,36 @@ def test_kubelet_dir(harness):
 
 
 @mock.patch("charm.CephCsiCharm._purge_manifest_by_name")
-def test_enforce_cephfs_enabled(mock_purge, harness):
+@pytest.mark.parametrize("manifest", ["cephfs", "rbd"])
+def test_enforce_provider_enabled(mock_purge, harness, manifest):
     harness.begin()
 
-    with reconcile_this(harness, lambda _: harness.charm._cephfs_configure()):
+    if manifest == "cephfs":
+        enabler = harness.charm._cephfs_enabled
+        config = "cephfs-enable"
+    else:
+        enabler = harness.charm._ceph_rbd_enabled
+        config = "ceph-rbd-enable"
+
+    with reconcile_this(harness, lambda _: enabler()):
         # disabled on leader, purge
         harness.disable_hooks()
         harness.set_leader(True)
         harness.enable_hooks()
-        harness.update_config({"cephfs-enable": False})
+        harness.update_config({config: False})
         assert harness.charm.unit.status.name == "active"
-        mock_purge.assert_called_once_with("cephfs")
+        mock_purge.assert_called_once_with(manifest)
         mock_purge.reset_mock()
 
         # enabled on leader, no purge
-        harness.update_config({"cephfs-enable": True})
+        harness.update_config({config: True})
         mock_purge.assert_not_called()
 
         # disabled on follower, no purge
         harness.disable_hooks()
         harness.set_leader(False)
         harness.enable_hooks()
-        harness.update_config({"cephfs-enable": False})
+        harness.update_config({config: False})
         mock_purge.assert_not_called()
         assert harness.charm.unit.status.name == "active"
 

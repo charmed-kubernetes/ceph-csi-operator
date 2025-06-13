@@ -276,6 +276,26 @@ async def test_cephfs(kube_config: Path, namespace: str, ops_test):
     await run_test_storage_class(kube_config, "cephfs")
 
 
+@pytest_asyncio.fixture()
+async def ceph_rbd_disabled(ops_test):
+    """Fixture which disable/enables ceph-rbd for a single test."""
+    test_app = ops_test.model.applications["ceph-csi"]
+    await test_app.set_config({"ceph-rbd-enable": "false"})
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), timeout=5 * 60)
+    yield
+    await test_app.set_config({"ceph-rbd-enable": "true"})
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
+
+
+@pytest.mark.usefixtures("cleanup_k8s", "ceph_rbd_disabled")
+async def test_provisioners_disabled(ops_test):
+    """Test that ceph-csi deployments do not include any provisioners."""
+    test_app = ops_test.model.applications["ceph-csi"]
+    for unit in test_app.units:
+        assert unit.workload_status == "blocked"
+        assert unit.workload_status_message == "Neither ceph-rbd nor cephfs is enabled."
+
+
 async def test_conflicting_ceph_csi(ops_test: OpsTest):
     """Test that deploying ceph-csi twice in the same model fails the second."""
     app = ops_test.model.applications[CEPH_CSI_ALT]

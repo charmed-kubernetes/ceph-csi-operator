@@ -7,7 +7,9 @@ from typing import Any, Dict, Generator, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
+from lightkube.resources.core_v1 import Secret
 from ops.manifests import Addition, Manifests, Patch
+from ops.manifests.manipulations import Subtraction
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,32 @@ class SafeManifest(Manifests):
         return {}  # pragma: no cover
 
     def evaluate(self) -> Optional[str]: ...  # pragma: no cover
+
+
+class StorageSecret(Addition):
+    """Create secret for the Provider."""
+
+    NAME: str
+    REQUIRED_CONFIG: Dict[str, List[str]]
+
+    def __call__(self) -> Optional[AnyResource]:
+        """Craft the secrets object for the deployment."""
+        manifest = self.manifests.name
+        if not self.manifests.config["enabled"]:
+            log.info("Ignore Secret from %s", manifest)
+            return None
+
+        stringData = {}
+        for k, keys in self.REQUIRED_CONFIG.items():
+            for secret_key in keys:
+                if value := self.manifests.config.get(k):
+                    stringData[secret_key] = value
+                else:
+                    log.error("%s is missing required secret item: '%s'", manifest, k)
+                    return None
+
+        log.info("Modelling secret data for %s.", manifest)
+        return Secret.from_dict(dict(metadata=dict(name=self.NAME), stringData=stringData))
 
 
 class AdjustNamespace(Patch):
@@ -339,3 +367,11 @@ class CSIDriverAdjustments(Patch):
 
         if obj.kind == "CSIDriver":
             obj.metadata.name = self.formatted
+
+
+class RemoveResource(Subtraction):
+    """Remove all resources when disabled."""
+
+    def __call__(self, _obj: AnyResource) -> bool:
+        """Remove this obj if manifest is not enabled."""
+        return not self.manifests.config["enabled"]
