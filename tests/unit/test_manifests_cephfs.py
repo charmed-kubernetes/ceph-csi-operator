@@ -13,9 +13,9 @@ from manifests_cephfs import (
     STORAGE_TYPE,
     CephFilesystem,
     CephFSManifests,
+    CephFSSecret,
     CephStorageClass,
     FSProvAdjustments,
-    StorageSecret,
 )
 
 TEST_CEPH_FS = CephFilesystem(
@@ -44,25 +44,28 @@ plugin_path = current_path / (FSProvAdjustments.PLUGIN_NAME + ".yaml")
 def test_storage_secret_modelled(caplog):
     caplog.set_level(logging.INFO)
     manifest = mock.MagicMock()
-    ss = StorageSecret(manifest)
+    manifest.name = "cephfs"
+    manifest.purging = False
     manifest.config = {"enabled": False}
+
+    ss = CephFSSecret(manifest)
     assert ss() is None
-    assert "Ignore Cephfs Storage Secret" in caplog.text
+    assert "Ignore Secret from " in caplog.text
 
     caplog.clear()
     manifest.config = {"enabled": True}
     assert ss() is None
-    assert "Cephfs is missing required secret item: 'user'" in caplog.text
+    assert "cephfs is missing required secret item: 'user'" in caplog.text
 
     caplog.clear()
     manifest.config = {"enabled": True, "user": "abcd"}
     assert ss() is None
-    assert "Cephfs is missing required secret item: 'kubernetes_key'" in caplog.text
+    assert "cephfs is missing required secret item: 'kubernetes_key'" in caplog.text
 
     caplog.clear()
     manifest.config = {"enabled": True, "user": "abcd", "kubernetes_key": "123"}
     expected = Secret(
-        metadata=ObjectMeta(name=StorageSecret.SECRET_NAME),
+        metadata=ObjectMeta(name=CephFSSecret.NAME),
         stringData={
             "userID": "abcd",
             "adminID": "abcd",
@@ -71,7 +74,7 @@ def test_storage_secret_modelled(caplog):
         },
     )
     assert ss() == expected
-    assert "Modelling secret data for cephfs storage." in caplog.text
+    assert "Modelling secret data for cephfs." in caplog.text
 
 
 def test_ceph_provisioner_adjustment_modelled(caplog):
@@ -140,11 +143,11 @@ def test_ceph_storage_class_modelled(caplog):
         provisioner=CephFSManifests.DRIVER_NAME,
         parameters={
             "clusterID": "abcd",
-            "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/controller-expand-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": alt_ns,
-            "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/provisioner-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": alt_ns,
-            "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/node-stage-secret-name": CephFSSecret.NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": alt_ns,
             "fsName": "ceph-fs-alt",
             "mounter": "fuse",
