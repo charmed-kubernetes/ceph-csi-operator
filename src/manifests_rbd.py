@@ -6,9 +6,8 @@ import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 
 from lightkube.codecs import AnyResource
-from lightkube.resources.core_v1 import Secret
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Addition, ConfigRegistry, ManifestLabel
+from ops.manifests import ConfigRegistry, ManifestLabel
 
 from manifests_base import (
     AdjustNamespace,
@@ -17,8 +16,10 @@ from manifests_base import (
     CSIDriverAdjustments,
     ProvisionerAdjustments,
     RbacAdjustments,
+    RemoveResource,
     SafeManifest,
     StorageClassFactory,
+    StorageSecret,
 )
 
 if TYPE_CHECKING:
@@ -27,30 +28,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class StorageSecret(Addition):
+class CephRBDSecret(StorageSecret):
     """Create secret for the deployment."""
 
-    SECRET_NAME = "csi-rbd-secret"
-
+    NAME = "csi-rbd-secret"
     REQUIRED_CONFIG = {
-        "user": "userID",
-        "kubernetes_key": "userKey",
+        "user": ["userID"],
+        "kubernetes_key": ["userKey"],
     }
-
-    def __call__(self) -> Optional[AnyResource]:
-        """Craft the secrets object for the deployment."""
-        secret_config = {}
-        for k, secret_key in self.REQUIRED_CONFIG.items():
-            if value := self.manifests.config.get(k):
-                secret_config[secret_key] = value
-            else:
-                log.error(f"RBD is missing required secret item: '{k}'")
-                return None
-
-        log.info("Modelling secret data for rbd storage.")
-        return Secret.from_dict(
-            dict(metadata=dict(name=self.SECRET_NAME), stringData=secret_config)
-        )
 
 
 class CephStorageClass(StorageClassFactory):
@@ -61,6 +46,7 @@ class CephStorageClass(StorageClassFactory):
     def __call__(self) -> Optional[AnyResource]:
         """Craft the storage class object."""
         driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
+        fs_type = self._fs_type.split("-")[1]
 
         if cast(SafeManifest, self.manifests).purging:
             # If we are purging, we may not be able to create any storage classes
@@ -68,8 +54,13 @@ class CephStorageClass(StorageClassFactory):
             # which will look up all storage classes installed by this app/manifest
             return StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))
 
+        if not self.manifests.config.get("enabled"):
+            log.info(
+                "Skipping Ceph %s storage class creation since it's disabled", fs_type.capitalize()
+            )
+            return None
+
         clusterID = self.manifests.config.get("fsid")
-        fs_type = self._fs_type.split("-")[1]
         if not clusterID:
             log.error(f"Ceph {fs_type.capitalize()} is missing required storage item: 'fsid'")
             return None
@@ -82,12 +73,12 @@ class CephStorageClass(StorageClassFactory):
         log.info(f"Modelling storage class {metadata['name']}")
         parameters = {
             "clusterID": clusterID,
-            "csi.storage.k8s.io/controller-expand-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/controller-expand-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/controller-expand-secret-namespace": ns,
             "csi.storage.k8s.io/fstype": fs_type,
-            "csi.storage.k8s.io/node-stage-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/node-stage-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
-            "csi.storage.k8s.io/provisioner-secret-name": StorageSecret.SECRET_NAME,
+            "csi.storage.k8s.io/provisioner-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
             "pool": f"{fs_type}-pool",
         }
@@ -128,12 +119,13 @@ class RBDManifests(SafeManifest):
             charm.model,
             "upstream/rbd",
             [
-                StorageSecret(self),
+                CephRBDSecret(self),
                 ConfigRegistry(self),
                 RBDProvAdjustments(self),
                 CephStorageClass(self, "ceph-xfs"),  # creates ceph-xfs
                 CephStorageClass(self, "ceph-ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
+                RemoveResource(self),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
@@ -163,14 +155,19 @@ class RBDManifests(SafeManifest):
                 del config[key]
 
         config["release"] = config.get("release", None)
+        config["enabled"] = config.get("ceph-rbd-enable", None)
         config["namespace"] = self.charm.stored.namespace
         config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
     def evaluate(self) -> Optional[str]:
         """Determine if manifest_config can be applied to manifests."""
+        if not self.config.get("enabled"):
+            log.info("Skipping CephRBD evaluation since it's disabled")
+            return None
+
         props = (
-            StorageSecret.REQUIRED_CONFIG.keys()
+            CephRBDSecret.REQUIRED_CONFIG.keys()
             | CephStorageClass.REQUIRED_CONFIG
             | RbacAdjustments.REQUIRED_CONFIG
         )
