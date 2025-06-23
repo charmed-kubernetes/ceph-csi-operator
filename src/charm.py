@@ -16,6 +16,7 @@ from charms.reconciler import Reconciler
 from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
 from lightkube.core.exceptions import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
@@ -224,14 +225,48 @@ class CephCsiCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("Evaluating kubernetes authentication")
         KubeConfig.from_env()
 
-    def check_namespace(self) -> None:
-        self.unit.status = ops.MaintenanceStatus("Evaluating namespace")
+    def _create_namespace(self, namespace: str) -> Optional[ops.StatusBase]:
+        """Create the namespace if it does not exist.
+
+        Args:
+            namespace (str): The name of the namespace to create.
+
+        Returns:
+            Optional[ops.StatusBase]: Returns None if the namespace was created or already exists,
+            or a status indicating an error if the namespace could not be created.
+        """
+        if not self.unit.is_leader():
+            logger.info("Waiting for namespace creation, not the leader")
+            return ops.WaitingStatus(f"Waiting for namespace '{namespace}'")
+
+        if not self.config["create-namespace"]:
+            logger.info("Skipping namespace creation, create-namespace is False")
+            return ops.BlockedStatus(f"Missing namespace '{namespace}'")
+
+        ns_resource = Namespace(metadata=ObjectMeta(name=namespace))
+        logger.info("Creating namespace '%s'", namespace)
+        status.add(ops.MaintenanceStatus(f"Creating namespace: '{namespace}'"))
         try:
-            self._client.get(Namespace, name=self.stored.namespace)  # type: ignore
+            self._client.create(ns_resource)
         except ApiError as e:
-            if "not found" in str(e.status.message):
-                status.add(ops.BlockedStatus(f"Missing namespace '{self.stored.namespace}'"))
-                raise status.ReconcilerError("Namespace not found")
+            if e.status.code == 409:  # Conflict
+                # Namespace already exists, do not raise an error
+                logger.info("Namespace '%s' already exists", namespace)
+            else:
+                logger.exception("Failed to create namespace '%s': %s", namespace, e)
+                return ops.WaitingStatus(f"Waiting for namespace: {namespace}")
+        return None
+
+    def check_namespace(self) -> None:
+        namespace = str(self.stored.namespace)
+        self.unit.status = ops.MaintenanceStatus(f"Evaluating namespace: '{namespace}'")
+        try:
+            self._client.get(Namespace, name=namespace)
+        except ApiError as e:
+            if e.status.code == 404:
+                if error := self._create_namespace(namespace):
+                    status.add(error)
+                    raise status.ReconcilerError(error.message)
             else:
                 # surface any other errors besides not found
                 status.add(ops.WaitingStatus("Waiting for Kubernetes API"))

@@ -87,17 +87,14 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str):
 async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTest):
     """Test that ceph-csi charm reached the active state after creating namespace."""
     config.load_kube_config(str(kube_config))
-    v1_core = client.CoreV1Api()
-    namespaces = [o.metadata.name for o in v1_core.list_namespace().items]
-    if namespace not in namespaces:
-        v1_namespace = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace))
-        v1_core.create_namespace(v1_namespace)
+    ceph_csi_app = ops_test.model.applications["ceph-csi"]
+    await ceph_csi_app.set_config({"create-namespace": "true"})
 
     async with ops_test.fast_forward("60s"):
         await ops_test.model.wait_for_idle(
             apps=ready_apps(ops_test), wait_for_active=True, timeout=30 * 60
         )
-    for unit in ops_test.model.applications["ceph-csi"].units:
+    for unit in ceph_csi_app.units:
         assert unit.workload_status == "active"
         assert unit.workload_status_message == "Ready"
 
