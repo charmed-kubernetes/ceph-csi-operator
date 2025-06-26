@@ -1,11 +1,37 @@
 name: Charmed Kubernetes VSphere Integration Tests
-on: [pull_request]
+on:
+  pull_request:
+  schedule:
+  - cron: "0 2 * * *"  # Run daily at 2 AM UTC
+
 
 jobs:
+  charm-source:
+    name: Ceph-CSI Source
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.charm.outputs.channel }}
+    steps:
+      - name: Pull-Request charm channel
+        id: charm
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]]; then
+            CHANNEL=$(jq -c -n '["latest/edge", "latest/stable"]')
+          else
+            CHANNEL=$(jq -c -n '[null]')
+          fi
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
   integration-test:
     name: VSphere Integration Test
+    needs: charm-source
+    strategy:
+      matrix:
+        channel: ${{ fromJson(needs.charm-source.outputs.channel) }}
     runs-on: self-hosted
     timeout-minutes: 120
+    env:
+      # Set default values
+      EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest"
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -27,8 +53,13 @@ jobs:
           bootstrap-options: "${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
           juju-channel: "3/stable"
 
+      - if: ${{ needs.charm-source.outputs.channel }}
+        name: Test from ceph-csi channel=${{ needs.charm-source.outputs.channel }}
+        run: |
+          echo "EXTRA_ARGS=${EXTRA_ARGS} --ceph-csi-channel=${{needs.charm-source.outputs.channel}}" >> $GITHUB_ENV
+
       - name: Run test
-        run: tox -e integration -- --basetemp=/home/ubuntu/pytest
+        run: tox -e integration -- ${EXTRA_ARGS}
 
       - name: Setup Debug Artifact Collection
         if: ${{ failure() }}

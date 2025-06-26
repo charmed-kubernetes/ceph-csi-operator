@@ -40,22 +40,26 @@ def ready_apps(ops_test: OpsTest):
 
 
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(ops_test: OpsTest, namespace: str):
+async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None):
     """Build ceph-csi charm and deploy testing model."""
-    charm = next(Path(".").glob("ceph-csi*.charm"), None)
-    if not charm:
-        logger.info("Building ceph-csi charm.")
-        charm = await ops_test.build_charm(".")
+    if ceph_csi_channel:
+        logger.info(f"Using ceph-csi channel: {ceph_csi_channel}")
+        charm = "ceph-csi"
+        channel = ceph_csi_channel
+    else:
+        channel = None
+        charm = next(Path(".").glob("ceph-csi*.charm"), None)
+        if not charm:
+            logger.info("Building ceph-csi charm.")
+            charm = await ops_test.build_charm(".")
+        charm = charm.resolve() if charm else None
 
     bundle_vars = {
-        "charm": charm.resolve(),
+        "charm": charm,
+        "channel": channel,
         "namespace": namespace,
         "release": environ.get("TEST_RELEASE", LATEST_RELEASE),
     }
-    proxy_settings = environ.get("TEST_HTTPS_PROXY")
-    if proxy_settings:
-        bundle_vars["https_proxy"] = proxy_settings
-
     overlays = [ops_test.Bundle("canonical-kubernetes", channel="latest/edge"), TEST_OVERLAY]
 
     bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
