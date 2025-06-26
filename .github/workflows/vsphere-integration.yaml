@@ -3,6 +3,7 @@ on:
   pull_request:
   schedule:
   - cron: "0 2 * * *"  # Run daily at 2 AM UTC
+  - cron: "0 0 * * 0"  # Run weekly at midnight on Sundays
 
 
 jobs:
@@ -15,18 +16,24 @@ jobs:
       - name: Pull-Request charm channel
         id: charm
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]]; then
-            CHANNEL=$(jq -c -n '["latest/edge", "latest/stable"]')
-          else
-            CHANNEL=$(jq -c -n '[null]')
+          set -euo pipefail
+          CHANNEL=""
+          SCHEDULE="${{ github.event.schedule || '' }}"
+          if [ "${SCHEDULE}" = "0 2 * * *" ]; then
+            CHANNEL="latest/edge"
+            echo "Using ${CHANNEL} channel for daily schedule"
+          elif [ "${SCHEDULE}" = "0 0 * * 0" ]; then
+            CHANNEL="latest/stable"
+            echo "Using ${CHANNEL} channel for weekly schedule"
+          fi
+
+          if [ -z "${CHANNEL}" ]; then
+            echo "Using empty channel for pull request"
           fi
           echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
   integration-test:
     name: VSphere Integration Test
     needs: charm-source
-    strategy:
-      matrix:
-        channel: ${{ fromJson(needs.charm-source.outputs.channel) }}
     runs-on: self-hosted
     timeout-minutes: 120
     env:
