@@ -16,6 +16,21 @@ from pytest_operator.plugin import OpsTest
 logger = logging.getLogger(__name__)
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--ceph-csi-channel",
+        action="store",
+        default=None,
+        help="Optional charm channel for ceph-csi deployment",
+    )
+
+
+@pytest.fixture(scope="session")
+def ceph_csi_channel(pytestconfig):
+    """Return the ceph-csi channel if specified."""
+    return pytestconfig.getoption("ceph_csi_channel")
+
+
 @pytest.fixture(scope="module")
 def namespace(ops_test) -> str:
     """Return namespace used for ceph-csi installment."""
