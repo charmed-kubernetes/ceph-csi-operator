@@ -4,8 +4,10 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Functional tests for ceph-csi charm."""
 
+import json
 import logging
 import shlex
+import time
 from os import environ
 from pathlib import Path
 from uuid import uuid4
@@ -15,7 +17,7 @@ import pytest_asyncio
 from kubernetes import client, config, utils
 from pytest_operator.plugin import OpsTest
 
-from utils import render_j2_template, wait_for_pod
+from utils import render_j2_template, wait_for_pod, wait_for_pvc_resize
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +28,10 @@ TEST_OVERLAY = TEST_PATH / "overlay.yaml"
 
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
 READING_POD_TEMPLATE = "reading_pod.yaml.j2"
+REPORTER_POD_TEMPLATE = "reporter_pod.yaml.j2"
 WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 
+RUNNING_POD_STATE = "Running"
 SUCCESS_POD_STATE = "Succeeded"
 CEPH_CSI_ALT = "ceph-csi-alt"
 CEPHFS_LS = dict(label_selector="juju.io/manifest=cephfs")
@@ -136,6 +140,83 @@ async def test_storage_class(kube_config: Path, storage_class: str):
     await run_test_storage_class(kube_config, storage_class)
 
 
+@pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
+@pytest.mark.usefixtures("cleanup_k8s", "ops_test")
+async def test_storage_resize(kube_config: Path, storage_class: str):
+    """Test that ceph can be used to create persistent volume.
+
+    Isolated tests for xfs and ext4, cephfs comes later.
+    """
+    await run_resize_storage_class(kube_config, storage_class)
+
+
+async def run_resize_storage_class(kube_config: Path, storage_class: str):
+    """Test that ceph can be used to create and resize persistent volume.
+
+    This test has following flow:
+      * Create PersistentVolumeClaim using one of the supported StorageClasses
+      * Create "reporter_pod" that begins reading filesystem stats from the PersistentVolumeClaim.
+      * Resize PersistentVolumeClaim
+      * Confirm that the filesystem has been resized in the "reporter_pod".
+    """
+    config.load_kube_config(str(kube_config))
+    k8s_api_client = client.ApiClient()
+    core_api = client.CoreV1Api()
+
+    storage = render_j2_template(TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class)
+    reporter_pod = render_j2_template(
+        TEMPLATE_DIR, REPORTER_POD_TEMPLATE, storage_class=storage_class
+    )
+    namespace = reporter_pod["metadata"]["namespace"]
+    reporter_pod_name = reporter_pod["metadata"]["name"]
+    pvc_name = storage["metadata"]["name"]
+
+    def current_size(pod_name: str, ns: str) -> int:
+        timeout, initial_stats = 120, []
+        while len(initial_stats) < 2 and timeout > 0:
+            pod_log = core_api.read_namespaced_pod_log(pod_name, ns)
+            initial_stats = pod_log.splitlines()
+            time.sleep(1)
+            timeout -= 1
+        report = json.loads(initial_stats[-1])
+        return report["size"] * report["blocks"]
+
+    try:
+        logger.info("Creating PersistentVolumeClaim %s", pvc_name)
+        utils.create_from_dict(k8s_api_client, storage)
+
+        logger.info("Creating Writer Pod %s", reporter_pod_name)
+        utils.create_from_dict(k8s_api_client, reporter_pod)
+        wait_for_pod(core_api, reporter_pod_name, namespace, target_state=RUNNING_POD_STATE)
+
+        logger.info("Read initial filesystem stats")
+        initial_size = current_size(reporter_pod_name, namespace)
+        logger.info("Initial stats: %s", initial_size)
+
+        # Resize the PVC
+        storage["spec"]["resources"]["requests"]["storage"] = "2Gi"
+        core_api.patch_namespaced_persistent_volume_claim(pvc_name, namespace, storage)
+
+        logger.info("Wait for pvc resize")
+        wait_for_pvc_resize(core_api, pvc_name, namespace, at_least="2Gi")
+
+        final_size, timeout = initial_size, 120
+        while (
+            timeout > 0
+            and (final_size := current_size(reporter_pod_name, namespace)) == initial_size
+        ):
+            logger.info("Waiting for filesystem resize, current size: %s", final_size)
+            time.sleep(1)
+            timeout -= 1
+
+        logger.info("Final stats: %s", final_size)
+        assert final_size > initial_size, "Filesystem resize did not complete"
+
+    finally:
+        core_api.delete_namespaced_pod(reporter_pod_name, namespace)
+        core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
+
+
 async def run_test_storage_class(kube_config: Path, storage_class: str):
     """Test that ceph can be used to create persistent volume.
 
@@ -165,11 +246,11 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
         logger.info("Creating PersistentVolumeClaim %s", storage["metadata"]["name"])
         utils.create_from_dict(k8s_api_client, storage)
 
-        logger.info("Creating Pod %s", writing_pod_name)
+        logger.info("Creating Writer Pod %s", writing_pod_name)
         utils.create_from_dict(k8s_api_client, writing_pod)
         wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
-        logger.info("Creating Pod %s", reading_pod_name)
+        logger.info("Creating Reader Pod %s", reading_pod_name)
         utils.create_from_dict(k8s_api_client, reading_pod)
         wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
