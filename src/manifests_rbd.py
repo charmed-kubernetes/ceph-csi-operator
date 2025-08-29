@@ -106,7 +106,7 @@ class ProvisionerAdjustments(Patch):
     """Update RBD provisioner."""
 
     def __call__(self, obj: AnyResource) -> None:
-        """Use the image-registry config and updates container images in obj."""
+        """Mutates CSI RBD Provisioner Deployment replicas/hostNetwork and DaemonSet kubelet_dir paths."""
         if (
             obj.kind == "Deployment"
             and obj.metadata
@@ -177,7 +177,6 @@ class RBDManifests(SafeManifest):
     def config(self) -> Dict:
         """Returns current config available from charm config and joined relations."""
         config: Dict = {}
-        config["image-registry"] = "rocks.canonical.com:443/cdk"
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.kubernetes_context)
