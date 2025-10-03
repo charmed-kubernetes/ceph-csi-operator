@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from kubernetes import client, config, utils
+from kubernetes.stream import stream
 from pytest_operator.plugin import OpsTest
 
 from utils import render_j2_template, wait_for_pod, wait_for_pvc_resize
@@ -169,6 +170,7 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
     )
     namespace = reporter_pod["metadata"]["namespace"]
     reporter_pod_name = reporter_pod["metadata"]["name"]
+    reporter_pod_mount = reporter_pod["spec"]["containers"][0]["volumeMounts"][0]["mountPath"]
     pvc_name = storage["metadata"]["name"]
 
     def current_size(pod_name: str, ns: str) -> int:
@@ -212,6 +214,24 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
         logger.info("Final stats: %s", final_size)
         assert final_size > initial_size, "Filesystem resize did not complete"
 
+        #check pvc size from api, same way kubectl gets it
+        pvc_final = core_api.read_namespaced_persistent_volume_claim(pvc_name, namespace)
+        reported_size = pvc_final.status.capacity.get("storage")
+
+        assert reported_size == "2Gi", (
+            f"PVC expected size should be 2Gi, though K8s says its {reported_size}"
+        )
+
+        #check in pod that size also matches what we expect
+        resp = stream(
+            core_api.connect_get_namespaced_pod_exec,
+            reporter_pod_name,
+            namespace,
+            command=["df", "-B1", reporter_pod_mount],
+            stderr=True, stdin=False, stdout=True, tty=False
+        )
+        logger.info("file sys size from inside pod:\n%s", resp)
+        assert "2147483648" in resp, "Filesystem size report does not match actual volume size"
     finally:
         core_api.delete_namespaced_pod(reporter_pod_name, namespace)
         core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
