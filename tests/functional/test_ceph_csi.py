@@ -46,9 +46,7 @@ def ready_apps(ops_test: OpsTest):
 
 
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(
-    ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None
-):
+async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None):
     """Build ceph-csi charm and deploy testing model."""
     if ceph_csi_channel:
         logger.info(f"Using ceph-csi channel: {ceph_csi_channel}")
@@ -77,9 +75,7 @@ async def test_build_and_deploy(
 
     logger.debug("Deploying ceph-csi functional test bundle.")
     model = ops_test.model_full_name
-    cmd = f"juju deploy -m {model} {bundle} " + " ".join(
-        f"--overlay={f}" for f in overlays
-    )
+    cmd = f"juju deploy -m {model} {bundle} " + " ".join(f"--overlay={f}" for f in overlays)
     rc, stdout, stderr = await ops_test.run(*shlex.split(cmd))
     assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
     logger.info(stdout)
@@ -98,9 +94,7 @@ async def test_build_and_deploy(
             logger.info(f"Waiting for ceph-csi units status: {workload_status}")
         return False
 
-    await ops_test.model.block_until(
-        ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5
-    )
+    await ops_test.model.block_until(ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5)
 
 
 async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTest):
@@ -174,17 +168,13 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
     k8s_api_client = client.ApiClient()
     core_api = client.CoreV1Api()
 
-    storage = render_j2_template(
-        TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class
-    )
+    storage = render_j2_template(TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class)
     reporter_pod = render_j2_template(
         TEMPLATE_DIR, REPORTER_POD_TEMPLATE, storage_class=storage_class
     )
     namespace = reporter_pod["metadata"]["namespace"]
     reporter_pod_name = reporter_pod["metadata"]["name"]
-    reporter_pod_mount = reporter_pod["spec"]["containers"][0]["volumeMounts"][0][
-        "mountPath"
-    ]
+    reporter_pod_mount = reporter_pod["spec"]["containers"][0]["volumeMounts"][0]["mountPath"]
     pvc_name = storage["metadata"]["name"]
 
     def current_size(pod_name: str, ns: str) -> int:
@@ -203,9 +193,7 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
 
         logger.info("Creating Writer Pod %s", reporter_pod_name)
         utils.create_from_dict(k8s_api_client, reporter_pod)
-        wait_for_pod(
-            core_api, reporter_pod_name, namespace, target_state=RUNNING_POD_STATE
-        )
+        wait_for_pod(core_api, reporter_pod_name, namespace, target_state=RUNNING_POD_STATE)
 
         logger.info("Read initial filesystem stats")
         initial_size = current_size(reporter_pod_name, namespace)
@@ -221,8 +209,7 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
         final_size, timeout = initial_size, 120
         while (
             timeout > 0
-            and (final_size := current_size(reporter_pod_name, namespace))
-            == initial_size
+            and (final_size := current_size(reporter_pod_name, namespace)) == initial_size
         ):
             logger.info("Waiting for filesystem resize, current size: %s", final_size)
             time.sleep(1)
@@ -232,9 +219,7 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
         assert final_size > initial_size, "Filesystem resize did not complete"
 
         # check pvc size from api, same way kubectl gets it
-        pvc_final = core_api.read_namespaced_persistent_volume_claim(
-            pvc_name, namespace
-        )
+        pvc_final = core_api.read_namespaced_persistent_volume_claim(pvc_name, namespace)
         reported_size = pvc_final.status.capacity.get("storage")
 
         assert (
@@ -280,9 +265,7 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
     k8s_api_client = client.ApiClient()
     core_api = client.CoreV1Api()
 
-    storage = render_j2_template(
-        TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class
-    )
+    storage = render_j2_template(TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class)
     reading_pod = render_j2_template(
         TEMPLATE_DIR, READING_POD_TEMPLATE, storage_class=storage_class
     )
@@ -302,28 +285,20 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
 
         logger.info("Creating Writer Pod %s", writing_pod_name)
         utils.create_from_dict(k8s_api_client, writing_pod)
-        wait_for_pod(
-            core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE
-        )
+        wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
         logger.info("Creating Reader Pod %s", reading_pod_name)
         utils.create_from_dict(k8s_api_client, reading_pod)
-        wait_for_pod(
-            core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE
-        )
+        wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
         pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
-        assert (
-            test_payload in pod_log
-        ), "Pod {} failed to read data written by pod {}".format(
+        assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
             reading_pod_name, writing_pod_name
         )
     finally:
         core_api.delete_namespaced_pod(reading_pod_name, namespace)
         core_api.delete_namespaced_pod(writing_pod_name, namespace)
-        core_api.delete_namespaced_persistent_volume_claim(
-            storage["metadata"]["name"], namespace
-        )
+        core_api.delete_namespaced_persistent_volume_claim(storage["metadata"]["name"], namespace)
 
 
 async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest):
@@ -389,16 +364,12 @@ async def test_host_networking(kube_config: Path, namespace: str, ops_test):
     test_app = ops_test.model.applications["ceph-csi"]
 
     await test_app.set_config({"enable-host-networking": "true"})
-    await ops_test.model.wait_for_idle(
-        apps=ready_apps(ops_test), status="active", timeout=5 * 60
-    )
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network is True
 
     await test_app.set_config({"enable-host-networking": "false"})
-    await ops_test.model.wait_for_idle(
-        apps=ready_apps(ops_test), status="active", timeout=5 * 60
-    )
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     assert rbdplugin.spec.template.spec.host_network in (None, False)
 
@@ -408,14 +379,10 @@ async def cephfs_enabled(ops_test):
     """Fixture which enables/disable cephfs for a single test."""
     test_app = ops_test.model.applications["ceph-csi"]
     await test_app.set_config({"cephfs-enable": "true"})
-    await ops_test.model.wait_for_idle(
-        apps=ready_apps(ops_test), status="active", timeout=5 * 60
-    )
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
     yield
     await test_app.set_config({"cephfs-enable": "false"})
-    await ops_test.model.wait_for_idle(
-        apps=ready_apps(ops_test), status="active", timeout=5 * 60
-    )
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
 
 
 @pytest.mark.usefixtures("cleanup_k8s", "cephfs_enabled")
@@ -439,9 +406,7 @@ async def ceph_rbd_disabled(ops_test):
     await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), timeout=5 * 60)
     yield
     await test_app.set_config({"ceph-rbd-enable": "true"})
-    await ops_test.model.wait_for_idle(
-        apps=ready_apps(ops_test), status="active", timeout=5 * 60
-    )
+    await ops_test.model.wait_for_idle(apps=ready_apps(ops_test), status="active", timeout=5 * 60)
 
 
 @pytest.mark.usefixtures("cleanup_k8s", "ceph_rbd_disabled")
@@ -459,9 +424,7 @@ async def test_conflicting_ceph_csi(ops_test: OpsTest):
     expected_msg = "resource collisions (action: list-resources)"
     try:
         await app.relate("kubernetes-info", "k8s")
-        await ops_test.model.wait_for_idle(
-            apps=[CEPH_CSI_ALT], status="blocked", timeout=5 * 60
-        )
+        await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="blocked", timeout=5 * 60)
         assert any(expected_msg in u.workload_status_message for u in app.units)
     finally:
         await app.destroy_relation("kubernetes-info", "k8s")
@@ -480,9 +443,7 @@ async def test_duplicate_ceph_csi(ops_test: OpsTest, namespace: str, kube_config
     v1_core = client.CoreV1Api()
     namespaces = [o.metadata.name for o in v1_core.list_namespace().items]
     if alt_namespace not in namespaces:
-        v1_namespace = client.V1Namespace(
-            metadata=client.V1ObjectMeta(name=alt_namespace)
-        )
+        v1_namespace = client.V1Namespace(metadata=client.V1ObjectMeta(name=alt_namespace))
         v1_core.create_namespace(v1_namespace)
 
     # Prepare to restore config after the test
@@ -500,9 +461,7 @@ async def test_duplicate_ceph_csi(ops_test: OpsTest, namespace: str, kube_config
 
     try:
         await app.relate("kubernetes-info", "k8s")
-        await ops_test.model.wait_for_idle(
-            apps=[CEPH_CSI_ALT], status="active", timeout=5 * 60
-        )
+        await ops_test.model.wait_for_idle(apps=[CEPH_CSI_ALT], status="active", timeout=5 * 60)
 
         await run_test_storage_class(kube_config, "ceph-xfs")
         await run_test_storage_class(kube_config, f"ceph-xfs-{alt_namespace}")
