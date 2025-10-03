@@ -6,9 +6,9 @@
 
 import json
 import logging
+import re
 import shlex
 import time
-import re
 from os import environ
 from pathlib import Path
 from uuid import uuid4
