@@ -1,0 +1,37 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: reporter-test-{{ storage_class }}
+  namespace: default
+spec:
+  volumes:
+  - name: shared-data
+    persistentVolumeClaim:
+      claimName: pvc-test-{{ storage_class }}
+      readOnly: false
+  containers:
+    - name: reporter-test-{{ storage_class }}
+      #  rocks registry is used because we were hitting rate limits in dockerhub
+      image: rocks.canonical.com:443/cdk/ubuntu:jammy
+      command:
+        - /bin/sh
+        - -c
+        - |
+          trap "echo 'Terminating'; exit 0" TERM
+          while true; do
+            stat -f -c '{"size":%S,"blocks":%b,"free_blocks":%f}' /data
+            sleep 2
+          done
+
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - exit 0
+        initialDelaySeconds: 5
+        periodSeconds: 5
+      volumeMounts:
+      - name: shared-data
+        mountPath: /data
+  restartPolicy: Never

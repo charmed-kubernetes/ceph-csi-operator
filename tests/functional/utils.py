@@ -75,3 +75,54 @@ def wait_for_pod(
                 timeout, name, target_state
             )
         )
+
+
+def wait_for_pvc_resize(
+    core_api: client.CoreV1Api,
+    name: str,
+    namespace: str,
+    timeout: int = 120,
+    at_least: str = "1Gi",
+) -> None:
+    """
+    Wait for kubernetes pvc to reach desired state.
+
+    If the state is not reached within specified timeout, pytest.fail is executed.
+
+    :param core_api: instance of CoreV1 kubernetes api.
+    :param name: name of the kubernetes pvc.
+    :param namespace: namespace in which the pvc is running
+    :param timeout: Maximum seconds to wait for pvc to reach at_least size
+    :param at_least: Expected minimum size of the pvc (in bytes).
+    :return: None
+    """
+    k8s_watch = watch.Watch()
+
+    logger.info("Waiting for pvc '%s' to reach size '%s'", name, at_least)
+    for event in k8s_watch.stream(
+        func=core_api.list_namespaced_persistent_volume_claim,
+        namespace=namespace,
+        timeout_seconds=timeout,
+    ):
+        resource = event["object"]
+        if resource.metadata.name != name:
+            continue
+        pvc_size = resource.status.capacity.get("storage", 0)
+        logger.debug("%s size: %s", name, pvc_size)
+        if pvc_size == at_least:
+            break
+    else:
+        logger.info(f"PVC failed to resize within allotted timeout: '{timeout}s'")
+        events: EventsV1EventList = core_api.list_namespaced_event(
+            namespace, field_selector=f"involvedObject.name={name}"
+        )
+        for event in events.items:
+            event_interest = ", ".join(
+                [event.type, event.reason, pprint.pformat(event.source), event.message]
+            )
+            logger.info(event_interest)
+        pytest.fail(
+            "Timeout after {}s while waiting for {} pvc to reach {} bytes".format(
+                timeout, name, at_least
+            )
+        )
