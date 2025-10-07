@@ -396,13 +396,21 @@ def test_cleanup(_purge_manifest, harness, caplog):
 
 def test_action_list_versions(harness):
     harness.begin()
+    ceph_versions = ["v1.0.0", "v1.1.0", "v2.0.0"]
 
     mock_event = mock.MagicMock(spec=ops.ActionEvent)
-    assert harness.charm._list_versions(mock_event) is None
+    with mock.patch.object(harness.charm.collector, "manifests") as mock_manifests:
+        mock_manifests.items.return_value = {
+            ("cephfs", mock.MagicMock(releases=ceph_versions)),
+            ("config", mock.MagicMock(releases=[])),
+            ("rbd", mock.MagicMock(releases=ceph_versions)),
+        }
+        assert harness.charm._list_versions(mock_event) is None
+
     expected_results = {
-        "cephfs-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+        "cephfs-versions": "\n".join(ceph_versions),
         "config-versions": "",
-        "rbd-versions": "v3.13.0\nv3.12.3\nv3.11.0\nv3.10.2\nv3.10.1\nv3.10.0\nv3.9.0\nv3.8.1\nv3.8.0\nv3.7.2",
+        "rbd-versions": "\n".join(ceph_versions),
     }
     mock_event.set_results.assert_called_once_with(expected_results)
 
