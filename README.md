@@ -116,18 +116,18 @@ along with `kubernetes` and `ceph` cluster to test its functionality in a real
 environment. There are a few ways to run functional tests
 
 ```bash
-tox -e func                          # Deploys new juju model and runs tests
-tox -e func -- --model <model_name>  # Runs tests against existing model
-tox -e func -- --keep-models         # Does not tear down model after tests are done (useful for debugging failing tests )
+tox -e integration                          # Deploys new juju model and runs tests
+tox -e integration -- --model <model_name>  # Runs tests against existing model
+tox -e integration -- --keep-models         # Does not tear down model after tests are done (useful for debugging failing tests )
 ```
 
-**__NOTE:__** If the environment which runs functional tests is behind a http
+**__NOTE:__** If the environment which runs integration tests is behind a http
 proxy, you must export `TEST_HTTPS_PROXY` environment variable. Otherwise
 Kubernetes might have problem fetching docker images. Example:
 
 ```bash
 export TEST_HTTPS_PROXY=http://10.0.0.1:3128
-tox -e func
+tox -e integration
 ```
 
 [1]: https://charmhub.io/kubernetes-control-plane
