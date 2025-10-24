@@ -47,7 +47,20 @@ config:
   options:
     default-storage:
       default: ceph-xfs
-      description: "Default storage class to use. Allowed values: 'ceph-ext4', 'ceph-xfs', 'cephfs'"
+      description: |
+        Default storage class to use.
+
+        If the charm created storage class matches this value, it will be
+        annotated as the default storage class in the kubernetes cluster.
+
+        Note: a cluster should only annotate one storage class as the default.
+        If multiple storage classes are annotated as default, the behavior
+        is undefined and may lead to unexpected results.
+
+        Leave empty to not set any storage class default via this charm.
+
+        annotation:
+          storageclass.kubernetes.io/is-default-class: "true"
       type: string
 
     provisioner-replicas:
