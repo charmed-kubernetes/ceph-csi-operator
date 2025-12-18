@@ -58,9 +58,6 @@ config:
         is undefined and may lead to unexpected results.
 
         Leave empty to not set any storage class default via this charm.
-
-        annotation:
-          storageclass.kubernetes.io/is-default-class: "true"
       type: string
 
     provisioner-replicas:
