@@ -1,6 +1,7 @@
 # Copyright 2021 Martin Kalcok
 # See LICENSE file for licensing details.
 """Pytest fixtures for functional tests."""
+
 #  pylint: disable=W0621
 
 import logging
