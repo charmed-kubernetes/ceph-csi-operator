@@ -4,8 +4,11 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Functional tests for ceph-csi charm."""
 
+import json
 import logging
+import re
 import shlex
+import time
 from os import environ
 from pathlib import Path
 from uuid import uuid4
@@ -13,9 +16,10 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from kubernetes import client, config, utils
+from kubernetes.stream import stream
 from pytest_operator.plugin import OpsTest
 
-from utils import render_j2_template, wait_for_pod
+from utils import render_j2_template, wait_for_pod, wait_for_pvc_resize
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +30,10 @@ TEST_OVERLAY = TEST_PATH / "overlay.yaml"
 
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
 READING_POD_TEMPLATE = "reading_pod.yaml.j2"
+REPORTER_POD_TEMPLATE = "reporter_pod.yaml.j2"
 WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 
+RUNNING_POD_STATE = "Running"
 SUCCESS_POD_STATE = "Succeeded"
 CEPH_CSI_ALT = "ceph-csi-alt"
 CEPHFS_LS = dict(label_selector="juju.io/manifest=cephfs")
@@ -60,7 +66,10 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_chan
         "namespace": namespace,
         "release": environ.get("TEST_RELEASE", LATEST_RELEASE),
     }
-    overlays = [ops_test.Bundle("canonical-kubernetes", channel="latest/edge"), TEST_OVERLAY]
+    overlays = [
+        ops_test.Bundle("canonical-kubernetes", channel="latest/edge"),
+        TEST_OVERLAY,
+    ]
 
     bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
 
@@ -136,6 +145,112 @@ async def test_storage_class(kube_config: Path, storage_class: str):
     await run_test_storage_class(kube_config, storage_class)
 
 
+@pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
+@pytest.mark.usefixtures("cleanup_k8s", "ops_test")
+async def test_storage_resize(kube_config: Path, storage_class: str):
+    """Test that ceph can be used to create persistent volume.
+
+    Isolated tests for xfs and ext4, cephfs comes later.
+    """
+    await run_resize_storage_class(kube_config, storage_class)
+
+
+async def run_resize_storage_class(kube_config: Path, storage_class: str):
+    """Test that ceph can be used to create and resize persistent volume.
+
+    This test has following flow:
+      * Create PersistentVolumeClaim using one of the supported StorageClasses
+      * Create "reporter_pod" that begins reading filesystem stats from the PersistentVolumeClaim.
+      * Resize PersistentVolumeClaim
+      * Confirm that the filesystem has been resized in the "reporter_pod".
+    """
+    config.load_kube_config(str(kube_config))
+    k8s_api_client = client.ApiClient()
+    core_api = client.CoreV1Api()
+
+    storage = render_j2_template(TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class)
+    reporter_pod = render_j2_template(
+        TEMPLATE_DIR, REPORTER_POD_TEMPLATE, storage_class=storage_class
+    )
+    namespace = reporter_pod["metadata"]["namespace"]
+    reporter_pod_name = reporter_pod["metadata"]["name"]
+    reporter_pod_mount = reporter_pod["spec"]["containers"][0]["volumeMounts"][0]["mountPath"]
+    pvc_name = storage["metadata"]["name"]
+
+    def current_size(pod_name: str, ns: str) -> int:
+        timeout, initial_stats = 120, []
+        while len(initial_stats) < 2 and timeout > 0:
+            pod_log = core_api.read_namespaced_pod_log(pod_name, ns)
+            initial_stats = pod_log.splitlines()
+            time.sleep(1)
+            timeout -= 1
+        report = json.loads(initial_stats[-1])
+        return report["size"] * report["blocks"]
+
+    try:
+        logger.info("Creating PersistentVolumeClaim %s", pvc_name)
+        utils.create_from_dict(k8s_api_client, storage)
+
+        logger.info("Creating Writer Pod %s", reporter_pod_name)
+        utils.create_from_dict(k8s_api_client, reporter_pod)
+        wait_for_pod(core_api, reporter_pod_name, namespace, target_state=RUNNING_POD_STATE)
+
+        logger.info("Read initial filesystem stats")
+        initial_size = current_size(reporter_pod_name, namespace)
+        logger.info("Initial stats: %s", initial_size)
+
+        # Resize the PVC
+        storage["spec"]["resources"]["requests"]["storage"] = "2Gi"
+        core_api.patch_namespaced_persistent_volume_claim(pvc_name, namespace, storage)
+
+        logger.info("Wait for pvc resize")
+        wait_for_pvc_resize(core_api, pvc_name, namespace, at_least="2Gi")
+
+        final_size, timeout = initial_size, 120
+        while (
+            timeout > 0
+            and (final_size := current_size(reporter_pod_name, namespace)) == initial_size
+        ):
+            logger.info("Waiting for filesystem resize, current size: %s", final_size)
+            time.sleep(1)
+            timeout -= 1
+
+        logger.info("Final stats: %s", final_size)
+        assert final_size > initial_size, "Filesystem resize did not complete"
+
+        # check pvc size from api, same way kubectl gets it
+        pvc_final = core_api.read_namespaced_persistent_volume_claim(pvc_name, namespace)
+        reported_size = pvc_final.status.capacity.get("storage")
+
+        assert (
+            reported_size == "2Gi"
+        ), f"PVC expected size should be 2Gi, though K8s says its {reported_size}"
+
+        # check in pod that size also matches what we expect
+        resp = stream(
+            core_api.connect_get_namespaced_pod_exec,
+            reporter_pod_name,
+            namespace,
+            command=["df", "-B1", reporter_pod_mount],
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+        )
+        logger.info("file sys size from inside pod:\n%s", resp)
+        match = re.search(r"/dev/\S+\s+(\d+)", resp)
+        assert match, "failed to find storage size from command"
+        reported_bytes = int(match.group(1))
+        expected_bytes = 2 * 1024 * 1024 * 1024  # 2 Gi
+        tolerance = 0.93
+        assert (
+            reported_bytes >= expected_bytes * tolerance
+        ), "Filesystem size report does not match actual volume size"
+    finally:
+        core_api.delete_namespaced_pod(reporter_pod_name, namespace)
+        core_api.delete_namespaced_persistent_volume_claim(pvc_name, namespace)
+
+
 async def run_test_storage_class(kube_config: Path, storage_class: str):
     """Test that ceph can be used to create persistent volume.
 
@@ -157,7 +272,10 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
     namespace = reading_pod["metadata"]["namespace"]
     reading_pod_name = reading_pod["metadata"]["name"]
     writing_pod = render_j2_template(
-        TEMPLATE_DIR, WRITING_POD_TEMPLATE, storage_class=storage_class, data=test_payload
+        TEMPLATE_DIR,
+        WRITING_POD_TEMPLATE,
+        storage_class=storage_class,
+        data=test_payload,
     )
     writing_pod_name = writing_pod["metadata"]["name"]
 
@@ -165,11 +283,11 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
         logger.info("Creating PersistentVolumeClaim %s", storage["metadata"]["name"])
         utils.create_from_dict(k8s_api_client, storage)
 
-        logger.info("Creating Pod %s", writing_pod_name)
+        logger.info("Creating Writer Pod %s", writing_pod_name)
         utils.create_from_dict(k8s_api_client, writing_pod)
         wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
-        logger.info("Creating Pod %s", reading_pod_name)
+        logger.info("Creating Reader Pod %s", reading_pod_name)
         utils.create_from_dict(k8s_api_client, reading_pod)
         wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
@@ -194,7 +312,10 @@ async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest
             if sc == expected_default:
                 assert is_default == "true", f"Expected to find {sc} as the default"
             else:
-                assert is_default in ("false", None), f"Expected to find {sc} not the default"
+                assert is_default in (
+                    "false",
+                    None,
+                ), f"Expected to find {sc} not the default"
 
     default_property = "storageclass.kubernetes.io/is-default-class"
     expected_classes = ["ceph-xfs", "ceph-ext4"]
