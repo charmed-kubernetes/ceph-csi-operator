@@ -3,7 +3,6 @@
 # See LICENSE file for licensing details.
 """Dispatch logic for the ceph-csi storage charm."""
 
-
 import json
 import logging
 from functools import cached_property
