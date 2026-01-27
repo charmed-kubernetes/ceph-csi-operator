@@ -22,26 +22,16 @@ parts:
   charm:
     plugin: charm
     build-packages: [git]
-    prime:
-      - upstream/**
-bases:
-  - build-on:
-    - name: "ubuntu"
-      channel: "22.04"
-      architectures: ["amd64"]
-    run-on:
-    - name: "ubuntu"
-      channel: "22.04"
-      architectures:
-      - amd64
-      - s390x
-      - arm64
-    - name: "ubuntu"
-      channel: "24.04"
-      architectures:
-      - amd64
-      - s390x
-      - arm64
+  upstream:
+    plugin: dump
+    source: upstream
+
+platforms:
+  amd64-build:
+    build-on:
+      - ubuntu@24.04:amd64
+    build-for:
+      - ubuntu@24.04:amd64
 
 config:
   options:
@@ -402,6 +392,8 @@ actions:
     - name
 
 requires:
+  ceph-csi:
+    interface: ceph-csi
   ceph-client:
     interface: ceph-client
   kubernetes:

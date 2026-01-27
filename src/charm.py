@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, cast
 
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
+import ceph_csi
 import ops
 from charms.reconciler import Reconciler
 from interface_ceph_client import ceph_client  # type: ignore
@@ -39,9 +40,19 @@ class CephCsiCharm(ops.CharmBase):
         """Setup even observers and initial storage values."""
         super().__init__(*args)
         self.ceph_client = ceph_client.CephClientRequires(self, literals.CEPH_CLIENT_RELATION)
+        self.ceph_csi = ceph_csi.CephCSIRequires(self, literals.CEPH_CSI_RELATION)
 
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
+        )
+        self.framework.observe(
+            self.ceph_csi.on.ceph_csi_available, self._on_ceph_csi_available
+        )
+        self.framework.observe(
+            self.ceph_csi.on.ceph_csi_connected, self._on_ceph_csi_connected
+        )
+        self.framework.observe(
+            self.ceph_csi.on.ceph_csi_departed, self._on_ceph_csi_departed
         )
         self.cli = utils.CephCLI(self)
         self.reconciler = Reconciler(self, self.reconcile)
@@ -147,6 +158,16 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def ceph_data(self) -> Dict[str, Any]:
         """Return Ceph data from ceph-client relation"""
+        csi_data = self.ceph_csi.get_relation_data()
+        if csi_data:
+            return {
+                "auth": "cephx",
+                "key": csi_data.get("user_key"),
+                "mon_hosts": csi_data.get("mon_hosts"),
+                "user_id": csi_data.get("user_id"),
+                "fsid": csi_data.get("fsid"),
+            }
+
         r_data = self.ceph_client.get_relation_data()
         return {k: r_data.get(k) for k in ("auth", "key", "mon_hosts")}
 
@@ -208,12 +229,16 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
+        csi_data = self.ceph_csi.get_relation_data()
+        fsid = csi_data.get("fsid") if csi_data else utils.fsid(self.cli)
+        user = csi_data.get("user_id") if csi_data else self.app.name
+        user_key = csi_data.get("user_key") if csi_data else self.key
         return {
             "auth": self.auth,
-            "fsid": utils.fsid(self.cli),
-            "kubernetes_key": self.key,
+            "fsid": fsid,
+            "kubernetes_key": user_key,
             "mon_hosts": self.mon_hosts,
-            "user": self.app.name,
+            "user": user,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
             CephStorageClass.FILESYSTEM_LISTING: utils.ls_ceph_fs(self.cli),
@@ -357,6 +382,16 @@ class CephCsiCharm(ops.CharmBase):
         :return: `True` if all the data successfully loaded, otherwise `False`
         """
         self.unit.status = ops.MaintenanceStatus("Checking Relations")
+        csi_data = self.ceph_csi.get_relation_data()
+        if csi_data:
+            expected_relation_keys = ("fsid", "mon_hosts", "user_id", "user_key")
+            missing_data = [key for key in expected_relation_keys if not csi_data.get(key)]
+            if missing_data:
+                logger.warning("ceph-csi relation is missing data: %s", missing_data)
+                status.add(ops.WaitingStatus("ceph-csi relation is missing data."))
+                raise status.ReconcilerError("ceph-csi relation is missing data.")
+            return
+
         try:
             relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
         except ops.model.TooManyRelatedAppsError:
@@ -426,6 +461,19 @@ class CephCsiCharm(ops.CharmBase):
         self.request_ceph_permissions()
         self.reconciler.reconcile(event)
 
+    def _on_ceph_csi_available(self, event: ops.EventBase) -> None:
+        """Handle ceph-csi available event."""
+        self.ceph_csi.request_workloads(["rbd", "cephfs"])
+
+    def _on_ceph_csi_connected(self, event: ops.EventBase) -> None:
+        """Handle ceph-csi connected event."""
+        self.reconciler.reconcile(event)
+
+    def _on_ceph_csi_departed(self, event: ops.EventBase) -> None:
+        """Handle ceph-csi departed event."""
+        if self.unit.is_leader():
+            self._purge_all_manifests()
+
     def _purge_all_manifests(self) -> None:
         """Purge resources created by this charm."""
         self.unit.status = ops.MaintenanceStatus("Removing Kubernetes resources")
@@ -461,7 +509,10 @@ class CephCsiCharm(ops.CharmBase):
         if isinstance(event, (ops.StopEvent, ops.RemoveEvent)):
             self.stored.destroying = True
             return True
-        elif isinstance(event, ops.RelationBrokenEvent) and event.relation.name == "ceph-client":
+        elif isinstance(event, ops.RelationBrokenEvent) and event.relation.name in (
+            literals.CEPH_CLIENT_RELATION,
+            literals.CEPH_CSI_RELATION,
+        ):
             return True
         return False
 
