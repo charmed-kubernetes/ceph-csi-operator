@@ -72,6 +72,8 @@ class CephStorageClass(StorageClassFactory):
             metadata["annotations"] = literals.DEFAULT_SC_ANNOTATION
 
         log.info(f"Modelling storage class {metadata['name']}")
+        # Use rbd_pool from ceph-csi relation if available, otherwise fall back to default
+        pool = self.manifests.config.get("rbd_pool") or f"{fs_type}-pool"
         parameters = {
             "clusterID": clusterID,
             "csi.storage.k8s.io/controller-expand-secret-name": CephRBDSecret.NAME,
@@ -81,7 +83,7 @@ class CephStorageClass(StorageClassFactory):
             "csi.storage.k8s.io/node-stage-secret-namespace": ns,
             "csi.storage.k8s.io/provisioner-secret-name": CephRBDSecret.NAME,
             "csi.storage.k8s.io/provisioner-secret-namespace": ns,
-            "pool": f"{fs_type}-pool",
+            "pool": pool,
         }
 
         self.update_params(parameters)

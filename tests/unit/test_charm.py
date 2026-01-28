@@ -66,6 +66,7 @@ def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_file):
         "provisioner_replicas": 3,
         "enable_host_network": "false",
         "fs_list": [],
+        "rbd_pool": None,
     }
 
     assert harness.charm.ceph_context == expected_context
@@ -875,3 +876,39 @@ def test_ceph_context_uses_relation_fs_when_cli_empty(ceph_data, mock_ls_ceph_fs
     assert len(context["fs_list"]) == 1
     assert context["fs_list"][0].name == "cephfs"
     assert context["fs_list"][0].data_pools == ["cephfs.cephfs.data"]
+
+
+@mock.patch("utils.ls_ceph_fs")
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_ceph_context_uses_rbd_pool_from_ceph_csi_relation(ceph_data, mock_ls_ceph_fs, harness):
+    """Test that ceph_context includes rbd_pool from ceph-csi relation data."""
+    harness.begin()
+
+    # Mock ceph_data for basic auth
+    ceph_data.return_value = {
+        "auth": "cephx",
+        "key": "secret_key",
+        "mon_hosts": ["10.0.0.1"],
+    }
+
+    # Mock CLI to return empty fs list
+    mock_ls_ceph_fs.return_value = []
+
+    # Mock ceph_csi relation data with rbd_pool
+    with mock.patch.object(
+        harness.charm.ceph_csi,
+        "get_relation_data",
+        return_value={
+            "fsid": "csi-fsid",
+            "user_id": "csi-user",
+            "user_key": "csi-key",
+            "rbd_pool": "rbd.my-custom-pool",
+        },
+    ):
+        context = harness.charm.ceph_context
+
+    # Verify rbd_pool is included in the context
+    assert context["rbd_pool"] == "rbd.my-custom-pool"
+    assert context["fsid"] == "csi-fsid"
+    assert context["user"] == "csi-user"
+    assert context["kubernetes_key"] == "csi-key"
