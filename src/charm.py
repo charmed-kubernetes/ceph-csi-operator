@@ -351,6 +351,9 @@ class CephCsiCharm(ops.CharmBase):
         csi_data = self.ceph_csi.get_relation_data()
         fsid = csi_data.get("fsid") if csi_data else utils.fsid(self.cli)
         user = csi_data.get("user_id") if csi_data else self.app.name
+        # Strip 'client.' prefix if present - ceph-csi adds it automatically
+        if user and user.startswith("client."):
+            user = user[7:]
         user_key = csi_data.get("user_key") if csi_data else self.key
 
         # Get filesystem listing - try CLI first, fall back to relation data
