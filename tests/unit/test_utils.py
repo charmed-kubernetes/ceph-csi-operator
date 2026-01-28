@@ -13,6 +13,7 @@ def test_write_ceph_cli_config(ceph_conf_directory):
     charm.mon_hosts = ["10.0.0.1", "10.0.0.2"]
     charm.key = "12345"
     charm.app.name = "ceph-csi"
+    charm.ceph_user = "ceph-csi"
     charm.unit.name = "ceph-csi/0"
 
     cli = utils.CephCLI(charm)
@@ -39,7 +40,7 @@ def test_write_ceph_cli_config(ceph_conf_directory):
     ]
     assert utils.CONFIG_PATH.read_text() == "\n".join(lines) + "\n"
 
-    path = utils._keyring_path(charm.app.name)
+    path = utils._keyring_path(charm.ceph_user)
     lines = ["[client.ceph-csi]", "key = 12345", ""]
     assert path.read_text() == "\n".join(lines) + "\n"
 

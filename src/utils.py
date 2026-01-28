@@ -26,6 +26,9 @@ class CharmLike(Protocol):
     def auth(self) -> str | None: ...
 
     @property
+    def ceph_user(self) -> str: ...
+
+    @property
     def key(self) -> str | None: ...
 
     @property
@@ -55,7 +58,7 @@ class CephCLI:
 
     def command(self, *args: str, timeout: int = 60) -> str:
         """Run a command and return the output"""
-        user = self._charm.app.name
+        user = self._charm.ceph_user
         cmd = ["/usr/bin/ceph", "--conf", CONFIG_PATH.as_posix(), "--user", user, *args]
         return subprocess.check_output(cmd, timeout=timeout).decode("UTF-8")
 
@@ -89,7 +92,7 @@ class CephCLI:
     def _write_keyring(self) -> None:
         """Write Ceph CLI keyring file"""
         config = configparser.ConfigParser()
-        user = self._charm.app.name
+        user = self._charm.ceph_user
         config[f"client.{user}"] = {"key": self._charm.key or ""}
         with _keyring_path(user).open("w") as fp:
             config.write(fp)

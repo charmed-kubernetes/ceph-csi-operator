@@ -24,7 +24,7 @@ from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
 import literals
 import utils
 from manifests_base import Manifests, SafeManifest
-from manifests_cephfs import CephFSManifests, CephStorageClass
+from manifests_cephfs import CephFilesystem, CephFSManifests, CephStorageClass
 from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
@@ -186,6 +186,14 @@ class CephCsiCharm(ops.CharmBase):
         """Return Ceph monitor hosts from ceph-client relation"""
         return self.ceph_data["mon_hosts"] or []
 
+    @property
+    def ceph_user(self) -> str:
+        """Return the Ceph user name for CLI operations."""
+        csi_data = self.ceph_csi.get_relation_data()
+        if csi_data and csi_data.get("user_id"):
+            return csi_data["user_id"]
+        return self.app.name
+
     @status.on_error(ops.BlockedStatus("Failed to install ceph apt packages."))
     def install_ceph_packages(self, event: ops.EventBase) -> None:
         """Install ceph deb packages"""
@@ -233,6 +241,12 @@ class CephCsiCharm(ops.CharmBase):
         fsid = csi_data.get("fsid") if csi_data else utils.fsid(self.cli)
         user = csi_data.get("user_id") if csi_data else self.app.name
         user_key = csi_data.get("user_key") if csi_data else self.key
+
+        # Get filesystem listing - try CLI first, fall back to relation data
+        fs_list = utils.ls_ceph_fs(self.cli)
+        if not fs_list and csi_data:
+            fs_list = self._cephfs_from_relation(csi_data)
+
         return {
             "auth": self.auth,
             "fsid": fsid,
@@ -241,8 +255,24 @@ class CephCsiCharm(ops.CharmBase):
             "user": user,
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
-            CephStorageClass.FILESYSTEM_LISTING: utils.ls_ceph_fs(self.cli),
+            CephStorageClass.FILESYSTEM_LISTING: fs_list,
         }
+
+    def _cephfs_from_relation(self, csi_data: Dict[str, Any]) -> List[CephFilesystem]:
+        """Construct CephFilesystem list from ceph-csi relation data."""
+        fs_name = csi_data.get("cephfs_fs_name")
+        if not fs_name:
+            return []
+
+        # Use Ceph's modern naming convention for pools
+        # MicroCeph creates pools as: cephfs.{fs_name}.meta and cephfs.{fs_name}.data
+        return [CephFilesystem(
+            name=fs_name,
+            metadata_pool=f"cephfs.{fs_name}.meta",
+            metadata_pool_id=0,
+            data_pool_ids=[0],
+            data_pools=[f"cephfs.{fs_name}.data"],
+        )]
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
     def check_kube_config(self) -> None:
@@ -382,6 +412,16 @@ class CephCsiCharm(ops.CharmBase):
         :return: `True` if all the data successfully loaded, otherwise `False`
         """
         self.unit.status = ops.MaintenanceStatus("Checking Relations")
+
+        # Check for mutual exclusivity of ceph-csi and ceph-client relations
+        csi_relation = self.model.get_relation(literals.CEPH_CSI_RELATION)
+        client_relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
+
+        if csi_relation and client_relation:
+            msg = "Both ceph-csi and ceph-client relations are active. Only one is allowed."
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+
         csi_data = self.ceph_csi.get_relation_data()
         if csi_data:
             expected_relation_keys = ("fsid", "mon_hosts", "user_id", "user_key")
