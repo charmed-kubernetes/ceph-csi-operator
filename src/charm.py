@@ -256,6 +256,7 @@ class CephCsiCharm(ops.CharmBase):
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
             CephStorageClass.FILESYSTEM_LISTING: fs_list,
+            "rbd_pool": csi_data.get("rbd_pool") if csi_data else None,
         }
 
     def _cephfs_from_relation(self, csi_data: Dict[str, Any]) -> List[CephFilesystem]:
