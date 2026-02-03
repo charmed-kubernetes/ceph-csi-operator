@@ -24,15 +24,13 @@ def test_ceph_config_modeled(caplog):
     expected = ConfigMap(
         metadata=ObjectMeta(name=CephConfig.NAME),
         data={
-            "ceph.conf": dedent(
-                """\
+            "ceph.conf": dedent("""\
                 [global]
                 auth_cluster_required = 1234
                 auth_service_required = 1234
                 auth_client_required = 1234
 
-                """
-            ),
+                """),
             "keyring": "",
         },
     )
