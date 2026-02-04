@@ -10,6 +10,7 @@ from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ConfigRegistry, ManifestLabel
 
+from literals import DEFAULT_SC_ANNOTATION
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
@@ -49,6 +50,7 @@ class CephStorageClassParameters:
     storage_class_name: str
     filesystem_name: str
     data_pool: str
+    is_default: bool
 
 
 class CephFSSecret(StorageSecret):
@@ -73,8 +75,8 @@ class CephStorageClass(StorageClassFactory):
 
         ns = self.manifests.config["namespace"]
         metadata: Dict[str, Any] = dict(name=param.storage_class_name)
-        if self.manifests.config.get("default-storage") == param.storage_class_name:
-            metadata["annotations"] = {"storageclass.kubernetes.io/is-default-class": "true"}
+        if param.is_default:
+            metadata["annotations"] = DEFAULT_SC_ANNOTATION
 
         log.info(f"Modelling storage class sc='{param.storage_class_name}'")
         parameters = {
@@ -140,7 +142,10 @@ class CephStorageClass(StorageClassFactory):
                     "pool-id": fs.data_pool_ids[idx],
                 }
                 sc_name = self.name(context)
-                sc_names += [CephStorageClassParameters(fsid, sc_name, fs.name, data_pool)]
+                sc_default = self.is_default(context)
+                sc_names += [
+                    CephStorageClassParameters(fsid, sc_name, fs.name, data_pool, sc_default)
+                ]
 
         if len(set(n.storage_class_name for n in sc_names)) != len(sc_names):
             log.error(

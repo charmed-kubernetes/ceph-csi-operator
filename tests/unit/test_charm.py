@@ -7,6 +7,7 @@
 import contextlib
 import unittest.mock as mock
 
+import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
 import ops
 import pytest
@@ -277,6 +278,38 @@ def test_evaluate_manifests_blocks(ceph_context, harness):
 
     assert harness.charm.unit.status.name == "blocked"
     assert harness.charm.unit.status.message == "Config manifests require the definition of 'auth'"
+
+
+@mock.patch("charm.SafeManifest.storage_classes")
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_block_multiple_default_storage_classes(ceph_context, storage_classes, harness):
+    """Test that multiple default storage classes are blocked."""
+    harness.begin()
+    ceph_context.return_value = {
+        "auth": "cephx",
+        "fsid": "12345",
+        "kubernetes_key": "123",
+        "mon_hosts": ["10.0.0.1"],
+        "user": "ceph-csi",
+        "provisioner_replicas": 3,
+        "enable_host_network": "false",
+        "fsname": None,
+    }
+    ext4_sc = mock.MagicMock()
+    ext4_sc.name = "ceph-ext4"
+    ext4_sc.resource.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+    xfs_sc = mock.MagicMock()
+    xfs_sc.name = "ceph-xfs"
+    xfs_sc.resource.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+    missing_meta = mock.MagicMock()
+    missing_meta.name = "invalid"
+    missing_meta.resource.metadata = None
+    storage_classes.return_value = {ext4_sc, xfs_sc, missing_meta}
+    with pytest.raises(status.ReconcilerError) as ei:
+        harness.charm.evaluate_manifests()
+    assert str(ei.value) == "Multiple StorageClasses are marked as default: ceph-ext4, ceph-xfs"
 
 
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)

@@ -6,7 +6,7 @@
 import json
 import logging
 from functools import cached_property
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Set, cast
 
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
@@ -18,7 +18,7 @@ from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
+from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
 
 import literals
 import utils
@@ -316,16 +316,46 @@ class CephCsiCharm(ops.CharmBase):
                 status.add(ops.BlockedStatus(msg))
                 raise status.ReconcilerError(msg)
 
+    def _prevent_multiple_default_storageclasses(
+        self, storage_classes: Set[HashableResource]
+    ) -> None:
+        """Prevent multiple StorageClasses from being marked as default.
+
+        Args:
+            storage_classes (Set[HashableResource]): Set of StorageClass resources to evaluate.
+        Raises:
+            status.ReconcilerError: If multiple StorageClasses are marked as default.
+        """
+
+        default_sc = set()
+        for sc in storage_classes:
+            meta = sc.resource.metadata
+            if not meta:
+                continue
+            annotations = meta.annotations or {}
+            if annotations.get(literals.DEFAULT_SC_ANNOTATION_NAME) == "true":
+                default_sc.add(sc)
+
+        if len(default_sc) > 1:
+            names = ", ".join(sorted(str(sc.name) for sc in default_sc))
+            msg = "Multiple StorageClasses are marked as default: " + names
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+
     def evaluate_manifests(self) -> int:
         """Evaluate all manifests."""
         self.unit.status = ops.MaintenanceStatus("Evaluating CephCSI")
+        storage_classes: Set[HashableResource] = set()
         new_hash = 0
         for manifest in self.collector.manifests.values():
             manifest = cast(SafeManifest, manifest)
             if evaluation := manifest.evaluate():
                 status.add(ops.BlockedStatus(evaluation))
                 raise status.ReconcilerError(evaluation)
+            storage_classes |= manifest.storage_classes()
             new_hash += manifest.hash()
+        self._prevent_multiple_default_storageclasses(storage_classes)
+
         return new_hash
 
     def install_manifests(self, config_hash: int) -> None:
