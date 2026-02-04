@@ -87,7 +87,7 @@ def reconcile_this(harness, method):
 
 
 @contextlib.contextmanager
-def mocked_handlers():
+def mocked_handlers(charm):
     handler_names = [
         "_destroying",
         "install_ceph_packages",
@@ -99,12 +99,12 @@ def mocked_handlers():
         "evaluate_manifests",
         "prevent_collisions",
         "install_manifests",
-        "_update_status",
     ]
 
-    handlers = [mock.patch(f"charm.CephCsiCharm.{name}") for name in handler_names]
-    yield dict(zip(handler_names, (h.start() for h in handlers)))
-    for handler in handlers:
+    handlers = {name: mock.patch(f"charm.CephCsiCharm.{name}") for name in handler_names}
+    handlers["update_status_run"] = mock.patch.object(charm.update_status, "run")
+    yield {h: patch.start() for h, patch in handlers.items()}
+    for handler in handlers.values():
         handler.stop()
 
 
@@ -116,7 +116,7 @@ def test_set_leader(harness):
     """
     harness.begin()
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
-    with mocked_handlers() as handlers:
+    with mocked_handlers(harness.charm) as handlers:
         handlers["_destroying"].return_value = False
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
@@ -618,6 +618,7 @@ def test_prevent_collisions(ceph_context, harness, caplog):
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
 def update_status_charm(ceph_context, harness):
     harness.set_leader(True)
+    harness.update_config({"default-storage": ""})
     harness.begin()
     harness.charm.reconciler.stored.reconciled = True
     harness.charm.stored.namespace = "non-default"
@@ -662,13 +663,89 @@ def test_update_status_changed_namespace(update_status_charm):
     )
 
 
-def test_update_status_ready(update_status_charm):
+def test_update_status_ready_with_cluster_warning(update_status_charm):
     update_status_charm.stored.namespace = "default"
     with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        default_annotated_metadata = mock.MagicMock()
+        default_annotated_metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+        mock_manifest.client.list.return_value = [
+            mock.MagicMock(name="ceph-ext4", metadata=default_annotated_metadata),
+            mock.MagicMock(name="ceph-xfs", metadata=default_annotated_metadata),
+        ]
+        mock_collector.manifests = {"manifest": mock_manifest}
         mock_collector.unready = []
         mock_collector.short_version = "short-version"
         mock_collector.long_version = "long-version"
         update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert (
+        update_status_charm.unit.status.message
+        == "Ready (Cluster contains multiple default StorageClasses)"
+    )
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_with_missing_default_warning(update_status_charm, harness):
+    harness.disable_hooks()
+    harness.update_config({"default-storage": "cephfs"})
+    harness.enable_hooks()
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert (
+        update_status_charm.unit.status.message
+        == "Ready (Cannot set any StorageClass as default-storage)"
+    )
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_with_default(update_status_charm, harness):
+    harness.disable_hooks()
+    harness.update_config({"default-storage": "cephfs"})
+    harness.enable_hooks()
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        default_metadata = mock.MagicMock()
+        default_metadata.labels = {"juju.io/application": harness.model.app.name}
+        default_metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+        mock_manifest.client.list.return_value = [
+            mock.MagicMock(name="cephfs", metadata=default_metadata),
+        ]
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert update_status_charm.unit.status.message == "Ready"
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_no_default(update_status_charm):
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert update_status_charm.unit.status.message == "Ready"
     assert update_status_charm.unit.status.name == "active"
     assert update_status_charm.app._backend._workload_version == "short-version"
     assert update_status_charm.app.status.message == "long-version"
