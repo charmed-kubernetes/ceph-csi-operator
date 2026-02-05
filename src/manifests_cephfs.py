@@ -21,6 +21,7 @@ from manifests_base import (
     SafeManifest,
     StorageClassFactory,
     StorageSecret,
+    ValidateResourceNames,
 )
 
 if TYPE_CHECKING:
@@ -210,6 +211,7 @@ class CephFSManifests(SafeManifest):
                 CephStorageClass(self, STORAGE_TYPE),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
+                ValidateResourceNames(self),
                 RemoveResource(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(

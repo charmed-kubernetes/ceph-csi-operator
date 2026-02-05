@@ -388,3 +388,21 @@ class RemoveResource(Subtraction):
         elif not enabled:
             log.info("Disabled, skipping resource %s", _obj)
         return not purging and not enabled
+
+
+class ValidateResourceNames(Patch):
+    """Validate that all resource names comply with RFC1123 subdomain rules."""
+
+    def __call__(self, obj: AnyResource) -> None:
+        """Check resource name against Kubernetes naming requirements."""
+        from k8s_name_validator import get_validation_error
+
+        if not obj.metadata or not obj.metadata.name:
+            return
+
+        resource_kind = obj.kind if hasattr(obj, "kind") else "Resource"
+        error_msg = get_validation_error(obj.metadata.name, resource_kind)
+
+        if error_msg:
+            log.error("RFC1123 validation failed: %s", error_msg)
+            raise ValueError(f"Invalid Kubernetes resource name: {error_msg}")
