@@ -10,7 +10,7 @@ from lightkube.resources.storage_v1 import StorageClass
 from manifests_base import ValidateResourceNames
 
 
-class TestValidateResourceNamesPatc:
+class TestValidateResourceNamesPatch:
     """Test the ValidateResourceNames patch class."""
 
     @pytest.fixture
