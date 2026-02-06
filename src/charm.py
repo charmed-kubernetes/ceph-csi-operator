@@ -110,8 +110,8 @@ class UpdateStatusHandler(ops.Object):
                 if len(self.charm.cluster_default_storage_classes(storage_classes)) > 1:
                     warnings = "Cluster contains multiple default StorageClasses"
                 elif self.charm.unmatched_default_storage_class(storage_classes):
-                    sc = self.charm.default_storage_fmt
-                    warnings = f"'{sc}' doesn't match any charm managed StorageClass"
+                    fmt = self.charm.default_storage_fmt
+                    warnings = f"'{fmt}' doesn't match any charm managed StorageClasses"
             except ApiError:
                 logger.exception("Failed to list StorageClasses for status warnings")
 
