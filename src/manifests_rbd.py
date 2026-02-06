@@ -126,9 +126,9 @@ class RBDManifests(SafeManifest):
                 CephStorageClass(self, "ceph-xfs"),  # creates ceph-xfs
                 CephStorageClass(self, "ceph-ext4"),  # creates ceph-ext4
                 RbacAdjustments(self),
-                ValidateResourceNames(self),
                 RemoveResource(self),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
+                ValidateResourceNames(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-rbdplugin-provisioner", "rbdplugin-provisioner"

@@ -211,8 +211,8 @@ class CephFSManifests(SafeManifest):
                 CephStorageClass(self, STORAGE_TYPE),
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
-                ValidateResourceNames(self),
                 RemoveResource(self),
+                ValidateResourceNames(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-cephfsplugin-provisioner", "cephfsplugin-provisioner"

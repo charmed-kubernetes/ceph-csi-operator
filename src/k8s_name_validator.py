@@ -23,7 +23,7 @@ class NameValidationError(Exception):
     pass
 
 
-def validate_resource_name(name_to_check: str, resource_type: str = "Resource") -> None:
+def validate_resource_name(name_to_check: Optional[str], resource_type: str = "Resource") -> None:
     """Verify that a resource name meets Kubernetes RFC1123 subdomain requirements.
 
     Kubernetes requires resource names to be RFC1123 subdomains which means:
@@ -33,7 +33,7 @@ def validate_resource_name(name_to_check: str, resource_type: str = "Resource") 
     - Must conclude with an alphanumeric character
 
     Args:
-        name_to_check: The resource name to validate
+        name_to_check: The resource name to validate (can be None)
         resource_type: Type of resource for error messaging
 
     Raises:
@@ -94,14 +94,16 @@ def validate_resource_name(name_to_check: str, resource_type: str = "Resource") 
     log.debug(f"Validated {resource_type} name: '{name_to_check}'")
 
 
-def get_validation_error(name_to_check: str, resource_type: str = "Resource") -> Optional[str]:
+def get_validation_error(
+    name_to_check: Optional[str], resource_type: str = "Resource"
+) -> Optional[str]:
     """Check if a name is valid and return an error message if not.
 
     This is a non-throwing version of validate_resource_name that returns
     an error string instead of raising an exception.
 
     Args:
-        name_to_check: The resource name to validate
+        name_to_check: The resource name to validate (can be None)
         resource_type: Type of resource for error messaging
 
     Returns:

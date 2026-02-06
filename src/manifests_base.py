@@ -11,6 +11,8 @@ from lightkube.resources.core_v1 import Secret
 from ops.manifests import Addition, Manifests, Patch
 from ops.manifests.manipulations import Subtraction
 
+from k8s_name_validator import get_validation_error
+
 log = logging.getLogger(__name__)
 
 
@@ -395,8 +397,6 @@ class ValidateResourceNames(Patch):
 
     def __call__(self, obj: AnyResource) -> None:
         """Check resource name against Kubernetes naming requirements."""
-        from k8s_name_validator import get_validation_error
-
         if not obj.metadata or not obj.metadata.name:
             return
 
