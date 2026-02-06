@@ -1,5 +1,5 @@
 ops >= 1.2.0
-ops.manifest == 1.6.0
+ops.manifest @ git+https://github.com/canonical/ops-lib-manifest.git@refs/pull/38/head
 jinja2
 pyyaml
 interface_ceph_client @ git+https://github.com/openstack/charm-ops-interface-ceph-client@d4d0cefc5e92edd28cdbf5d00e190d4498896418
