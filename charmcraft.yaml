@@ -57,9 +57,26 @@ config:
         that StorageClass is annotated as the default StorageClass in the
         Kubernetes cluster.
 
+        Format replacements for StorageClass names may also be included
+          - {app}         - the name of the Juju application
+          - {namespace}   - the charm configured namespace
+          - {name}        - the name of a cephfs filesystem if available
+          - {pool}        - the name of a cephfs data-pool if available
+          - {pool-id}     - the id   of a cephfs data-pool if available
+
         Note: a cluster should only annotate one StorageClass as the default.
-        If multiple StorageClasses are annotated as default, the behavior
-        is undefined and may lead to unexpected results.
+
+        If multiple StorageClasses managed by the charm match this value,
+        the unit will block with the message:
+        - Multiple StorageClasses are marked as default
+
+        If multiple default StorageClasses are discovered in the cluster,
+        the unit will warn with the message:
+        - Cluster contains multiple default StorageClasses
+
+        If this value matches none of the charm-managed StorageClasses,
+        the unit will warn with the message:
+        - '<value>' doesn't match any charm managed StorageClasses
 
       type: string
 
@@ -82,7 +99,7 @@ config:
 
         The formatter is a string that can contain the following placeholders:
           - {name}             - original name from the manifest
-          - {app}              - the name of the juju application
+          - {app}              - the name of the Juju application
           - {namespace}        - the charm configured namespace
 
         Example:
@@ -101,7 +118,7 @@ config:
         Formatter for the cephfs storage class name
 
         The formatter is a string that can contain the following placeholders:
-          - {app}              - the name of the juju application
+          - {app}              - the name of the Juju application
           - {namespace}        - the charm configured namespace
           - {name}             - the name of the filesystem
           - {pool}             - the name of the data-pool
@@ -181,7 +198,7 @@ config:
         Formatter for the ceph xfs storage class name
 
         The formatter is a string that can contain the following placeholders:
-          - {app}              - the name of the juju application
+          - {app}              - the name of the Juju application
           - {namespace}        - the charm configured namespace
 
         Example:
@@ -209,7 +226,7 @@ config:
         Formatter for the ceph ext4 storage class name
 
         The formatter is a string that can contain the following placeholders:
-          - {app}              - the name of the juju application
+          - {app}              - the name of the Juju application
           - {namespace}        - the charm configured namespace
 
         Example:
@@ -251,7 +268,7 @@ config:
           - ClusterRoleBinding/rbd-csi-provisioner-role
 
         The formatter is a string that can contain the following placeholders:
-          - {app}       - the name of the juju application
+          - {app}       - the name of the Juju application
           - {name}      - the name of the kubernetes resource
           - {namespace} - the charm configured namespace
 

@@ -6,11 +6,12 @@
 import json
 import logging
 from functools import cached_property
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Set, cast
 
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
 import ops
+import ops.manifests.literals as manifest_literals
 from charms.reconciler import Reconciler
 from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
@@ -18,7 +19,7 @@ from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Collector, ManifestClientError, ResourceAnalysis
+from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
 
 import literals
 import utils
@@ -28,6 +29,108 @@ from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
 logger = logging.getLogger(__name__)
+
+
+class DynamicActiveStatus(ops.ActiveStatus):
+    """An ActiveStatus class that can be updated.
+
+    Attributes:
+        message (str): explanation of the unit status
+        prefix  (str): Optional prefix to the unit status
+        postfix (str): Optional postfix to the unit status
+    """
+
+    def __init__(self, msg: str = "Ready") -> None:
+        """Initialise the DynamicActiveStatus."""
+        super().__init__(msg)
+        self.prefix: str = ""
+        self.postfix: str = ""
+
+    @property
+    def message(self) -> str:
+        """Return the message for the status."""
+        pre = f"{self.prefix} :" if self.prefix else ""
+        post = f" ({self.postfix})" if self.postfix else ""
+        return f"{pre}{self._message}{post}"
+
+    @message.setter
+    def message(self, message: str) -> None:
+        """Set the message for the status.
+
+        Args:
+            message (str): explanation of the unit status
+        """
+        self._message = message
+
+
+class UpdateStatusHandler(ops.Object):
+    """Handler for the update-status event in the ceph-csi operator.
+
+    This class observes the `update_status` event and handles it by checking the
+    status of the manifest installer and updating the unit's workload version accordingly.
+
+    Attributes:
+        charm (CharmBase): The charm instance that this handler is associated with.
+        active_status (DynamicActiveStatus): The active status object used to manage
+            the unit's status during the update process.
+    """
+
+    def __init__(self, charm: "CephCsiCharm"):
+        """Initialize the UpdateStatusEvent.
+
+        Args:
+            charm: The charm instance that is instantiating this event.
+        """
+        super().__init__(charm, "update_status")
+        self.charm = charm
+        self.active_status = DynamicActiveStatus()
+        self.charm.framework.observe(self.charm.on.update_status, self._on_update_status)
+
+    def run(self) -> None:
+        if not (
+            self.charm.config[literals.CONFIG_CEPH_RBD_ENABLE]
+            or self.charm.config[literals.CONFIG_CEPHFS_ENABLE]
+        ):
+            msg = "Neither ceph-rbd nor cephfs is enabled."
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+        elif unready := self.charm.collector.unready:
+            status.add(ops.WaitingStatus(", ".join(unready)))
+            raise status.ReconcilerError("Waiting for deployment")
+        elif self.charm.stored.namespace != self.charm._configured_ns:
+            status.add(ops.BlockedStatus("Namespace cannot be changed after deployment"))
+        elif self.charm.stored.drivername != self.charm._configured_drivername:
+            status.add(
+                ops.BlockedStatus("csidriver-name-formatter cannot be changed after deployment")
+            )
+        else:
+            warnings: str = ""
+            self.charm.unit.set_workload_version(self.charm.collector.short_version)
+            if self.charm.unit.is_leader():
+                self.charm.app.status = ops.ActiveStatus(self.charm.collector.long_version)
+            try:
+                storage_classes = self.charm.list_storage_classes()
+                default_scs = self.charm.cluster_default_storage_classes(storage_classes)
+                if len(default_scs) > 1:
+                    warnings = "Cluster contains multiple default StorageClasses"
+                elif self.charm.is_default_storage_class_missing(default_scs):
+                    fmt = self.charm.default_storage_fmt
+                    warnings = f"'{fmt}' doesn't match any charm managed StorageClasses"
+            except ApiError:
+                logger.exception("Failed to list StorageClasses for status warnings")
+
+            self.active_status.postfix = warnings
+
+    def _on_update_status(self, _: ops.UpdateStatusEvent) -> None:
+        """Handle update-status event."""
+        if not self.charm.reconciler.stored.reconciled:
+            return
+
+        try:
+            with status.context(self.charm.unit, exit_status=self.active_status):
+                self.run()
+        except status.ReconcilerError:
+            logger.exception("Can't update_status")
 
 
 class CephCsiCharm(ops.CharmBase):
@@ -44,14 +147,16 @@ class CephCsiCharm(ops.CharmBase):
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
         )
         self.cli = utils.CephCLI(self)
-        self.reconciler = Reconciler(self, self.reconcile)
+        self.update_status = UpdateStatusHandler(self)
+        self.reconciler = Reconciler(
+            self, self.reconcile, exit_status=self.update_status.active_status
+        )
 
         self.framework.observe(self.on.list_versions_action, self._list_versions)
         self.framework.observe(self.on.list_resources_action, self._list_resources)
         self.framework.observe(self.on.scrub_resources_action, self._scrub_resources)
         self.framework.observe(self.on.sync_resources_action, self._sync_resources)
         self.framework.observe(self.on.delete_storage_class_action, self._delete_storage_class)
-        self.framework.observe(self.on.update_status, self._on_update_status)
 
         self.stored.set_default(config_hash=0)  # hashed value of the provider config once valid
         self.stored.set_default(destroying=False)  # True when the charm is being shutdown
@@ -63,6 +168,11 @@ class CephCsiCharm(ops.CharmBase):
             CephFSManifests(self),
             RBDManifests(self),
         )
+
+    @property
+    def default_storage_fmt(self) -> str:
+        """Get the currently configured default storage class."""
+        return cast(str, self.config[literals.CONFIG_DEFAULT_STORAGE])
 
     def _list_versions(self, event: ops.ActionEvent) -> None:
         self.collector.list_versions(event)
@@ -89,6 +199,35 @@ class CephCsiCharm(ops.CharmBase):
         else:
             self.stored.deployed = True
 
+    def list_storage_classes(self) -> List[StorageClass]:
+        """List all StorageClasses in the cluster."""
+        manifest, *_ = self.collector.manifests.values()
+        return list(manifest.client.list(StorageClass))
+
+    def cluster_default_storage_classes(self, scs: List[StorageClass]) -> List[StorageClass]:
+        """Find all default StorageClasses in the cluster."""
+        default_scs = [
+            sc
+            for sc in scs
+            if (meta := sc.metadata)
+            and (anno := meta.annotations)
+            and anno.get(literals.DEFAULT_SC_ANNOTATION_NAME) == "true"
+        ]
+        return default_scs
+
+    def is_default_storage_class_missing(self, scs: List[StorageClass]) -> bool:
+        """Check if this charm has configured the cluster's default StorageClass."""
+        if not self.default_storage_fmt:
+            # No default StorageClass configured in charm, so no need to check
+            return False
+        # True if any of the storage classes (scs) were created by this charm
+        return not any(
+            sc.metadata
+            and sc.metadata.labels
+            and sc.metadata.labels.get(manifest_literals.APP_LABEL) == self.app.name
+            for sc in scs
+        )
+
     def _delete_storage_class(self, event: ops.ActionEvent) -> None:
         storage_class: Optional[str] = event.params.get("name")
         if storage_class not in ["cephfs", "ceph-xfs", "ceph-ext4"]:
@@ -105,34 +244,6 @@ class CephCsiCharm(ops.CharmBase):
             event.fail(msg)
         else:
             event.set_results({"result": f"Successfully deleted StorageClass/{storage_class}"})
-
-    def _update_status(self) -> None:
-        if not (self.config["ceph-rbd-enable"] or self.config["cephfs-enable"]):
-            msg = "Neither ceph-rbd nor cephfs is enabled."
-            status.add(ops.BlockedStatus(msg))
-            raise status.ReconcilerError(msg)
-        elif unready := self.collector.unready:
-            status.add(ops.WaitingStatus(", ".join(unready)))
-            raise status.ReconcilerError("Waiting for deployment")
-        elif self.stored.namespace != self._configured_ns:
-            status.add(ops.BlockedStatus("Namespace cannot be changed after deployment"))
-        elif self.stored.drivername != self._configured_drivername:
-            status.add(
-                ops.BlockedStatus("csidriver-name-formatter cannot be changed after deployment")
-            )
-        else:
-            self.unit.set_workload_version(self.collector.short_version)
-            if self.unit.is_leader():
-                self.app.status = ops.ActiveStatus(self.collector.long_version)
-
-    def _on_update_status(self, _: ops.EventBase) -> None:
-        if not self.reconciler.stored.reconciled:
-            return
-        try:
-            with status.context(self.unit):
-                self._update_status()
-        except status.ReconcilerError:
-            logger.exception("Can't update_status")
 
     @property
     def _configured_ns(self) -> str:
@@ -275,7 +386,7 @@ class CephCsiCharm(ops.CharmBase):
     def _ceph_rbd_enabled(self) -> None:
         """Determine if CephRBD should be enabled or disabled."""
 
-        if self.config["ceph-rbd-enable"]:
+        if self.config[literals.CONFIG_CEPH_RBD_ENABLE]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephRBD")
         else:
             self.unit.status = ops.MaintenanceStatus("Disabling CephRBD")
@@ -285,7 +396,7 @@ class CephCsiCharm(ops.CharmBase):
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
     def _cephfs_enabled(self) -> None:
         """Determine if CephFS should be enabled or disabled."""
-        if self.config["cephfs-enable"]:
+        if self.config[literals.CONFIG_CEPHFS_ENABLE]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephFS")
             groups = {literals.CEPHFS_SUBVOLUMEGROUP}
             for volume in utils.ls_ceph_fs(self.cli):
@@ -316,16 +427,46 @@ class CephCsiCharm(ops.CharmBase):
                 status.add(ops.BlockedStatus(msg))
                 raise status.ReconcilerError(msg)
 
+    def _prevent_multiple_default_storageclasses(
+        self, storage_classes: Set[HashableResource]
+    ) -> None:
+        """Prevent multiple StorageClasses from being marked as default.
+
+        Args:
+            storage_classes (Set[HashableResource]): Set of StorageClass resources to evaluate.
+        Raises:
+            status.ReconcilerError: If multiple StorageClasses are marked as default.
+        """
+
+        default_sc = set()
+        for sc in storage_classes:
+            meta = sc.resource.metadata
+            if not meta:
+                continue
+            annotations = meta.annotations or {}
+            if annotations.get(literals.DEFAULT_SC_ANNOTATION_NAME) == "true":
+                default_sc.add(sc)
+
+        if len(default_sc) > 1:
+            names = ", ".join(sorted(str(sc.name) for sc in default_sc))
+            msg = "Multiple StorageClasses are marked as default: " + names
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+
     def evaluate_manifests(self) -> int:
         """Evaluate all manifests."""
         self.unit.status = ops.MaintenanceStatus("Evaluating CephCSI")
+        storage_classes: Set[HashableResource] = set()
         new_hash = 0
         for manifest in self.collector.manifests.values():
             manifest = cast(SafeManifest, manifest)
             if evaluation := manifest.evaluate():
                 status.add(ops.BlockedStatus(evaluation))
                 raise status.ReconcilerError(evaluation)
+            storage_classes |= manifest.storage_classes()
             new_hash += manifest.hash()
+        self._prevent_multiple_default_storageclasses(storage_classes)
+
         return new_hash
 
     def install_manifests(self, config_hash: int) -> None:
@@ -395,7 +536,7 @@ class CephCsiCharm(ops.CharmBase):
         hash = self.evaluate_manifests()
         self.prevent_collisions(event)
         self.install_manifests(config_hash=hash)
-        self._update_status()
+        self.update_status.run()
 
     def request_ceph_pools(self) -> None:
         """Request creation of Ceph pools from the ceph-client relation"""
