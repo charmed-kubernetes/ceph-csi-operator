@@ -4,11 +4,13 @@
 
 import logging
 import pprint
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, Optional
 
 import pytest
 import yaml
 from jinja2 import Environment, FileSystemLoader
+from juju.application import Application
 from kubernetes import client, watch
 from kubernetes.client.models import EventsV1EventList
 
@@ -126,3 +128,49 @@ def wait_for_pvc_resize(
                 timeout, name, at_least
             )
         )
+
+
+def units_have_status(app: Application, status: str, message_substring: Optional[str] = None):
+    """Return a function that checks whether all units of an application have a given status.
+
+    :param app: The application to check.
+    :param status: The expected status.
+    :param message_substring: An optional substring that should be present in the unit's message.
+    :return: A function that checks the status of the units.
+    """
+
+    def _check() -> bool:
+        check_msg = message_substring is not None
+        unit_status, unit_message = [], []
+        for unit in app.units:
+            unit_status.append(unit.workload_status)
+            unit_message.append(unit.workload_status_message if check_msg else "")
+        success = all(
+            s == status and message_substring in m for s, m in zip(unit_status, unit_message)
+        )
+        if not success:
+            current = ""
+            for u, s, m in zip(app.units, unit_status, unit_message):
+                extra = f", message='{m}'" if check_msg else ""
+                current += f"\n - Unit {u.name}: status='{s}'{extra}"
+            logger.info(
+                "Waiting for all units of app '%s' to have status '%s'%s. " "Current statuses: %s",
+                app.name,
+                status,
+                f" and message containing '{message_substring}'" if check_msg else "",
+                current,
+            )
+        return success
+
+    return _check
+
+
+@asynccontextmanager
+async def set_test_config(app: Application, config: dict):
+    """Restore application config to previous state."""
+    current_config = await app.get_config()
+    await app.set_config(config)
+    try:
+        yield
+    finally:
+        await app.set_config(current_config)

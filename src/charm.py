@@ -110,7 +110,8 @@ class UpdateStatusHandler(ops.Object):
                 if len(self.charm.cluster_default_storage_classes(storage_classes)) > 1:
                     warnings = "Cluster contains multiple default StorageClasses"
                 elif self.charm.unmatched_default_storage_class(storage_classes):
-                    warnings = "Cannot set any StorageClass as default-storage"
+                    sc = self.charm.default_storage_fmt
+                    warnings = f"'{sc}' doesn't match any charm managed StorageClass"
             except ApiError:
                 logger.exception("Failed to list StorageClasses for status warnings")
 
@@ -164,6 +165,11 @@ class CephCsiCharm(ops.CharmBase):
             RBDManifests(self),
         )
 
+    @property
+    def default_storage_fmt(self) -> str:
+        """Get the currently configured default storage class."""
+        return cast(str, self.config[literals.DEFAULT_STORAGE])
+
     def _list_versions(self, event: ops.ActionEvent) -> None:
         self.collector.list_versions(event)
 
@@ -207,16 +213,14 @@ class CephCsiCharm(ops.CharmBase):
 
     def unmatched_default_storage_class(self, scs: List[StorageClass]) -> bool:
         """Check if this charm has configured the cluster's default StorageClass."""
-        if self.config[literals.DEFAULT_STORAGE] == "":
+        if self.default_storage_fmt == "":
             # No default storage class configured in charm, so no need to check
             return False
-        for sc in scs:
+        for sc in self.cluster_default_storage_classes(scs):
             if (
                 (meta := sc.metadata)
                 and (labels := meta.labels)
                 and labels.get(manifest_literals.APP_LABEL) == self.app.name
-                and (anno := meta.annotations)
-                and anno.get(literals.DEFAULT_SC_ANNOTATION_NAME) == "true"
             ):
                 # Found a StorageClass from this application marked as default
                 return False

@@ -703,7 +703,7 @@ def test_update_status_ready_with_missing_default_warning(update_status_charm, h
     mock_manifest.client.list.assert_called_once_with(StorageClass)
     assert (
         update_status_charm.unit.status.message
-        == "Ready (Cannot set any StorageClass as default-storage)"
+        == "Ready ('cephfs' doesn't match any charm managed StorageClass)"
     )
     assert update_status_charm.unit.status.name == "active"
     assert update_status_charm.app._backend._workload_version == "short-version"
