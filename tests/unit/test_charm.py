@@ -12,6 +12,7 @@ import charms.operator_libs_linux.v0.apt as apt
 import ops
 import pytest
 from lightkube.core.exceptions import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
@@ -667,11 +668,11 @@ def test_update_status_ready_with_cluster_warning(update_status_charm):
     update_status_charm.stored.namespace = "default"
     with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_manifest = mock.MagicMock()
-        default_annotated_metadata = mock.MagicMock()
-        default_annotated_metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+        default_annotated_meta = mock.Mock(spec_set=ObjectMeta)
+        default_annotated_meta.annotations = literals.DEFAULT_SC_ANNOTATION
         mock_manifest.client.list.return_value = [
-            mock.MagicMock(name="ceph-ext4", metadata=default_annotated_metadata),
-            mock.MagicMock(name="ceph-xfs", metadata=default_annotated_metadata),
+            mock.Mock(spec_set=StorageClass, name="ceph-ext4", metadata=default_annotated_meta),
+            mock.Mock(spec_set=StorageClass, name="ceph-xfs", metadata=default_annotated_meta),
         ]
         mock_collector.manifests = {"manifest": mock_manifest}
         mock_collector.unready = []
@@ -695,6 +696,27 @@ def test_update_status_ready_with_missing_default_warning(update_status_charm, h
     update_status_charm.stored.namespace = "default"
     with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_manifest = mock.MagicMock()
+
+        # Create 3 mock StorageClasses
+        # 1. matches this charm's name but is not annotated as default
+        my_app_non_default = mock.Mock(name="ceph-ext4", spec_set=StorageClass)
+        my_app_non_default.metadata.labels = {"juju.io/application": harness.model.app.name}
+        my_app_non_default.metadata.annotations = {}
+
+        # 2. matches another charm's name but is not annotated as default
+        other_app_non_default = mock.Mock(name="ceph-alt-ext4", spec_set=StorageClass)
+        other_app_non_default.metadata.labels = {"juju.io/application": "ceph-csi-alternate"}
+
+        # 3. matches another charm's name and is annotated as default
+        other_app_default = mock.Mock(name="ceph-alt-xfs", spec_set=StorageClass)
+        other_app_default.metadata.labels = {"juju.io/application": "ceph-csi-alternate"}
+        other_app_default.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+        mock_manifest.client.list.return_value = [
+            other_app_non_default,
+            other_app_default,
+            my_app_non_default,
+        ]
         mock_collector.manifests = {"manifest": mock_manifest}
         mock_collector.unready = []
         mock_collector.short_version = "short-version"
@@ -717,11 +739,11 @@ def test_update_status_ready_with_default(update_status_charm, harness):
     update_status_charm.stored.namespace = "default"
     with mock.patch.object(update_status_charm, "collector") as mock_collector:
         mock_manifest = mock.MagicMock()
-        default_metadata = mock.MagicMock()
+        default_metadata = mock.Mock(spec_set=ObjectMeta)
         default_metadata.labels = {"juju.io/application": harness.model.app.name}
         default_metadata.annotations = literals.DEFAULT_SC_ANNOTATION
         mock_manifest.client.list.return_value = [
-            mock.MagicMock(name="cephfs", metadata=default_metadata),
+            mock.Mock(spec_set=StorageClass, name="cephfs", metadata=default_metadata),
         ]
         mock_collector.manifests = {"manifest": mock_manifest}
         mock_collector.unready = []

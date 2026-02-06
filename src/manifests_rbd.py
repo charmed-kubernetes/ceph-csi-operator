@@ -9,7 +9,7 @@ from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ConfigRegistry, ManifestLabel
 
-from literals import DEFAULT_SC_ANNOTATION
+import literals
 from manifests_base import (
     AdjustNamespace,
     CephToleration,
@@ -69,7 +69,7 @@ class CephStorageClass(StorageClassFactory):
         ns = self.manifests.config["namespace"]
         metadata: Dict = {"name": self.name()}
         if self.is_default():
-            metadata["annotations"] = DEFAULT_SC_ANNOTATION
+            metadata["annotations"] = literals.DEFAULT_SC_ANNOTATION
 
         log.info(f"Modelling storage class {metadata['name']}")
         parameters = {
@@ -156,7 +156,7 @@ class RBDManifests(SafeManifest):
                 del config[key]
 
         config["release"] = config.get("release", None)
-        config["enabled"] = config.get("ceph-rbd-enable", None)
+        config["enabled"] = config.get(literals.CONFIG_CEPH_RBD_ENABLE, None)
         config["namespace"] = self.charm.stored.namespace
         config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config

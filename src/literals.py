@@ -17,6 +17,9 @@ REQUIRED_CEPH_POOLS = ["xfs-pool", "ext4-pool"]
 DEFAULT_NAMESPACE = "default"
 
 # Default StorageClass name and annotation
-DEFAULT_STORAGE = "default-storage"
+CONFIG_DEFAULT_STORAGE = "default-storage"
 DEFAULT_SC_ANNOTATION_NAME = "storageclass.kubernetes.io/is-default-class"
 DEFAULT_SC_ANNOTATION = {DEFAULT_SC_ANNOTATION_NAME: "true"}
+
+CONFIG_CEPH_RBD_ENABLE = "ceph-rbd-enable"
+CONFIG_CEPHFS_ENABLE = "cephfs-enable"

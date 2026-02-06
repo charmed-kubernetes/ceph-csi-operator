@@ -518,7 +518,7 @@ class TestStorageClass:
         """Test that setting default-storage to a non-existing storage warns the user."""
         app = ops_test.model.applications["ceph-csi"]
         async with set_test_config(app, {"default-storage": request.node.name}):
-            msg = f"'{request.node.name}' doesn't match any charm managed StorageClass"
+            msg = f"'{request.node.name}' doesn't match any charm managed StorageClasses"
             await ops_test.model.wait_for_idle(apps=[app.name], timeout=5 * 60)
             await ops_test.model.block_until(
                 units_have_status(app, "active", msg),
@@ -526,7 +526,7 @@ class TestStorageClass:
             )
         await ops_test.model.wait_for_idle(apps=[app.name], status="active", timeout=5 * 60)
 
-    # Testing multiple cephfs pools
+    # TODO: Testing multiple cephfs pools
     #
     # Create a second data pool for cephfs
     #     $ ceph osd pool create ceph-fs_data_ci 2

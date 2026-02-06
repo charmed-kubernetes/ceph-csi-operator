@@ -11,7 +11,7 @@ from lightkube.resources.core_v1 import Secret
 from ops.manifests import Addition, HashableResource, Manifests, Patch
 from ops.manifests.manipulations import Subtraction
 
-from literals import DEFAULT_STORAGE
+from literals import CONFIG_DEFAULT_STORAGE
 
 log = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ class StorageClassFactory(Addition):
     def is_default(self, context: Dict[str, Any] = {}) -> bool:
         """Determine if this storage class is the default."""
         def_name: str = ""  # no default-storage configured
-        if def_fmt := self.manifests.config.get(DEFAULT_STORAGE):
+        if def_fmt := self.manifests.config.get(CONFIG_DEFAULT_STORAGE):
             def_name = def_fmt.format(**self._format_context(context))
         return def_name == self.name(context)
 

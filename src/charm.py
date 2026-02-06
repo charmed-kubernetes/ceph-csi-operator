@@ -87,7 +87,10 @@ class UpdateStatusHandler(ops.Object):
         self.charm.framework.observe(self.charm.on.update_status, self._on_update_status)
 
     def run(self) -> None:
-        if not (self.charm.config["ceph-rbd-enable"] or self.charm.config["cephfs-enable"]):
+        if not (
+            self.charm.config[literals.CONFIG_CEPH_RBD_ENABLE]
+            or self.charm.config[literals.CONFIG_CEPHFS_ENABLE]
+        ):
             msg = "Neither ceph-rbd nor cephfs is enabled."
             status.add(ops.BlockedStatus(msg))
             raise status.ReconcilerError(msg)
@@ -107,9 +110,10 @@ class UpdateStatusHandler(ops.Object):
                 self.charm.app.status = ops.ActiveStatus(self.charm.collector.long_version)
             try:
                 storage_classes = self.charm.list_storage_classes()
-                if len(self.charm.cluster_default_storage_classes(storage_classes)) > 1:
+                default_scs = self.charm.cluster_default_storage_classes(storage_classes)
+                if len(default_scs) > 1:
                     warnings = "Cluster contains multiple default StorageClasses"
-                elif self.charm.unmatched_default_storage_class(storage_classes):
+                elif self.charm.is_default_storage_class_missing(default_scs):
                     fmt = self.charm.default_storage_fmt
                     warnings = f"'{fmt}' doesn't match any charm managed StorageClasses"
             except ApiError:
@@ -168,7 +172,7 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def default_storage_fmt(self) -> str:
         """Get the currently configured default storage class."""
-        return cast(str, self.config[literals.DEFAULT_STORAGE])
+        return cast(str, self.config[literals.CONFIG_DEFAULT_STORAGE])
 
     def _list_versions(self, event: ops.ActionEvent) -> None:
         self.collector.list_versions(event)
@@ -211,20 +215,18 @@ class CephCsiCharm(ops.CharmBase):
         ]
         return default_scs
 
-    def unmatched_default_storage_class(self, scs: List[StorageClass]) -> bool:
+    def is_default_storage_class_missing(self, scs: List[StorageClass]) -> bool:
         """Check if this charm has configured the cluster's default StorageClass."""
-        if self.default_storage_fmt == "":
-            # No default storage class configured in charm, so no need to check
+        if not self.default_storage_fmt:
+            # No default StorageClass configured in charm, so no need to check
             return False
-        for sc in self.cluster_default_storage_classes(scs):
-            if (
-                (meta := sc.metadata)
-                and (labels := meta.labels)
-                and labels.get(manifest_literals.APP_LABEL) == self.app.name
-            ):
-                # Found a StorageClass from this application marked as default
-                return False
-        return True
+        # True if any of the storage classes (scs) were created by this charm
+        return not any(
+            sc.metadata
+            and sc.metadata.labels
+            and sc.metadata.labels.get(manifest_literals.APP_LABEL) == self.app.name
+            for sc in scs
+        )
 
     def _delete_storage_class(self, event: ops.ActionEvent) -> None:
         storage_class: Optional[str] = event.params.get("name")
@@ -384,7 +386,7 @@ class CephCsiCharm(ops.CharmBase):
     def _ceph_rbd_enabled(self) -> None:
         """Determine if CephRBD should be enabled or disabled."""
 
-        if self.config["ceph-rbd-enable"]:
+        if self.config[literals.CONFIG_CEPH_RBD_ENABLE]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephRBD")
         else:
             self.unit.status = ops.MaintenanceStatus("Disabling CephRBD")
@@ -394,7 +396,7 @@ class CephCsiCharm(ops.CharmBase):
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
     def _cephfs_enabled(self) -> None:
         """Determine if CephFS should be enabled or disabled."""
-        if self.config["cephfs-enable"]:
+        if self.config[literals.CONFIG_CEPHFS_ENABLE]:
             self.unit.status = ops.MaintenanceStatus("Enabling CephFS")
             groups = {literals.CEPHFS_SUBVOLUMEGROUP}
             for volume in utils.ls_ceph_fs(self.cli):
