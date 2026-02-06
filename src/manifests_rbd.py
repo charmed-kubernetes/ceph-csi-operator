@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ConfigRegistry, ManifestLabel
+from ops.manifests.manipulations import ValidateResourceNames
 
 from manifests_base import (
     AdjustNamespace,
@@ -20,7 +21,6 @@ from manifests_base import (
     SafeManifest,
     StorageClassFactory,
     StorageSecret,
-    ValidateResourceNames,
 )
 
 if TYPE_CHECKING:
