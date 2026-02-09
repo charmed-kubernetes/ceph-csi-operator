@@ -1030,3 +1030,30 @@ def test_request_ceph_csi_workloads_with_no_providers_enabled(harness):
         # or should be called with empty list
         # Looking at the code, it checks if workloads list is truthy before calling
         mock_request.assert_not_called()
+
+
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_check_ceph_client_with_incomplete_ceph_csi_data(ceph_data, harness):
+    """Test check_ceph_client raises error when ceph-csi relation data is incomplete."""
+    ceph_data.return_value = None
+    harness.begin()
+    harness.disable_hooks()
+    
+    # Add ceph-csi relation
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+    
+    # Mock incomplete ceph-csi data (missing user_key)
+    with mock.patch.object(
+        harness.charm.ceph_csi,
+        "get_relation_data",
+        return_value={
+            "fsid": "test-fsid",
+            "mon_hosts": ["10.0.0.1"],
+            "user_id": "ceph-csi",
+            "user_key": None,  # Missing this required field
+        },
+    ):
+        # This should raise a ReconcilerError
+        with pytest.raises(status.ReconcilerError, match="ceph-csi relation is missing data"):
+            harness.charm.check_ceph_client()
