@@ -53,14 +53,9 @@ class CephCSIClientCharm(CharmBase):
 
 import json
 import logging
-from typing import Iterable, List
+from typing import Iterable
 
-from ops.charm import (
-    CharmBase,
-    RelationBrokenEvent,
-    RelationChangedEvent,
-    RelationEvent,
-)
+from ops.charm import CharmBase, RelationBrokenEvent, RelationChangedEvent, RelationEvent
 from ops.framework import EventSource, Object, ObjectEvents
 from ops.model import Relation
 
@@ -100,7 +95,7 @@ class CephCSIEvents(ObjectEvents):
 class CephCSIRequires(Object):
     """CephCSIRequires class."""
 
-    on = CephCSIEvents()  # type: ignore[assignment]
+    on = CephCSIEvents()
 
     def __init__(self, charm: CharmBase, relation_name: str):
         super().__init__(charm, relation_name)
@@ -121,7 +116,7 @@ class CephCSIRequires(Object):
             self._on_ceph_csi_relation_broken,
         )
 
-    def _on_ceph_csi_relation_changed(self, event: RelationChangedEvent):
+    def _on_ceph_csi_relation_changed(self, event: RelationChangedEvent) -> None:
         """Handle ceph-csi relation changed."""
         logger.debug("ceph-csi relation changed")
         if self._is_data_ready(event.relation):
@@ -129,7 +124,7 @@ class CephCSIRequires(Object):
             return
         self.on.ceph_csi_available.emit(event.relation)
 
-    def _on_ceph_csi_relation_broken(self, event: RelationBrokenEvent):
+    def _on_ceph_csi_relation_broken(self, event: RelationBrokenEvent) -> None:
         """Handle ceph-csi relation broken."""
         logger.debug("ceph-csi relation broken")
         self.on.ceph_csi_departed.emit(event.relation)

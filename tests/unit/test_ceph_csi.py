@@ -3,7 +3,6 @@
 """Unit tests for src/ceph_csi.py"""
 
 import json
-import unittest.mock as mock
 
 import pytest
 from ops.charm import CharmBase
@@ -45,12 +44,15 @@ class MockCharm(CharmBase):
 
 @pytest.fixture
 def harness():
-    harness = Harness(MockCharm, meta="""
+    harness = Harness(
+        MockCharm,
+        meta="""
         name: test-charm
         requires:
           ceph:
             interface: ceph-csi
-    """)
+    """,
+    )
     try:
         yield harness
     finally:
@@ -69,7 +71,7 @@ def test_ceph_csi_available_event(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     # Without required data, should emit available event
     # Need to update with at least some data to trigger the event
     harness.update_relation_data(relation_id, "microceph", {"fsid": "test"})
@@ -81,7 +83,7 @@ def test_ceph_csi_connected_event(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     # With all required data, should emit connected event
     harness.update_relation_data(
         relation_id,
@@ -101,7 +103,7 @@ def test_ceph_csi_departed_event(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.remove_relation(relation_id)
     assert "departed" in harness.charm.events
 
@@ -111,7 +113,7 @@ def test_is_data_ready_with_all_required_keys(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.update_relation_data(
         relation_id,
         "microceph",
@@ -122,7 +124,7 @@ def test_is_data_ready_with_all_required_keys(harness):
             "user_key": "secret",
         },
     )
-    
+
     relation = harness.charm.model.get_relation("ceph")
     assert harness.charm.ceph_csi._is_data_ready(relation) is True
 
@@ -132,7 +134,7 @@ def test_is_data_ready_with_missing_keys(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     # Missing user_key
     harness.update_relation_data(
         relation_id,
@@ -143,7 +145,7 @@ def test_is_data_ready_with_missing_keys(harness):
             "user_id": "ceph-csi",
         },
     )
-    
+
     relation = harness.charm.model.get_relation("ceph")
     assert harness.charm.ceph_csi._is_data_ready(relation) is False
 
@@ -153,7 +155,7 @@ def test_is_data_ready_with_empty_relation_data(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     relation = harness.charm.model.get_relation("ceph")
     assert harness.charm.ceph_csi._is_data_ready(relation) is False
 
@@ -164,9 +166,9 @@ def test_request_workloads_as_leader(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.charm.ceph_csi.request_workloads(["rbd", "cephfs"])
-    
+
     relation = harness.charm.model.get_relation("ceph")
     unit_data = relation.data[harness.charm.unit]
     assert "workloads" in unit_data
@@ -179,9 +181,9 @@ def test_request_workloads_as_non_leader(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.charm.ceph_csi.request_workloads(["rbd", "cephfs"])
-    
+
     relation = harness.charm.model.get_relation("ceph")
     unit_data = relation.data[harness.charm.unit]
     assert "workloads" not in unit_data
@@ -191,7 +193,7 @@ def test_request_workloads_without_relation(harness):
     """Test request_workloads does nothing when no relation exists."""
     harness.set_leader(True)
     harness.begin()
-    
+
     # This should not raise an error
     harness.charm.ceph_csi.request_workloads(["rbd", "cephfs"])
 
@@ -201,7 +203,7 @@ def test_get_relation_data_with_full_data(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.update_relation_data(
         relation_id,
         "microceph",
@@ -214,7 +216,7 @@ def test_get_relation_data_with_full_data(harness):
             "user_key": "AQDtest456==",
         },
     )
-    
+
     data = harness.charm.ceph_csi.get_relation_data()
     assert data["fsid"] == "test-fsid-456"
     assert data["mon_hosts"] == ["10.0.0.1:6789", "10.0.0.2:6789"]
@@ -229,7 +231,7 @@ def test_get_relation_data_with_partial_data(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     harness.update_relation_data(
         relation_id,
         "microceph",
@@ -240,7 +242,7 @@ def test_get_relation_data_with_partial_data(harness):
             "user_key": "secret",
         },
     )
-    
+
     data = harness.charm.ceph_csi.get_relation_data()
     assert data["fsid"] == "test-fsid"
     assert data["mon_hosts"] == ["10.0.0.1"]
@@ -253,7 +255,7 @@ def test_get_relation_data_with_partial_data(harness):
 def test_get_relation_data_without_relation(harness):
     """Test get_relation_data returns empty dict when no relation exists."""
     harness.begin()
-    
+
     data = harness.charm.ceph_csi.get_relation_data()
     assert data == {}
 
@@ -263,7 +265,7 @@ def test_get_relation_data_with_empty_relation_data(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     data = harness.charm.ceph_csi.get_relation_data()
     assert data == {}
 
@@ -273,7 +275,7 @@ def test_relation_property_with_relation(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     relation = harness.charm.ceph_csi._relation
     assert relation is not None
     assert relation.name == "ceph"
@@ -282,7 +284,7 @@ def test_relation_property_with_relation(harness):
 def test_relation_property_without_relation(harness):
     """Test _relation property returns None when no relation exists."""
     harness.begin()
-    
+
     relation = harness.charm.ceph_csi._relation
     assert relation is None
 
@@ -293,18 +295,18 @@ def test_request_workloads_with_different_workload_combinations(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     # Test with single workload
     harness.charm.ceph_csi.request_workloads(["rbd"])
     relation = harness.charm.model.get_relation("ceph")
     unit_data = relation.data[harness.charm.unit]
     assert json.loads(unit_data["workloads"]) == ["rbd"]
-    
+
     # Test with multiple workloads
     harness.charm.ceph_csi.request_workloads(["rbd", "cephfs"])
     unit_data = relation.data[harness.charm.unit]
     assert json.loads(unit_data["workloads"]) == ["rbd", "cephfs"]
-    
+
     # Test with empty list
     harness.charm.ceph_csi.request_workloads([])
     unit_data = relation.data[harness.charm.unit]
@@ -316,7 +318,7 @@ def test_get_relation_data_handles_invalid_json(harness):
     harness.begin()
     relation_id = harness.add_relation("ceph", "microceph")
     harness.add_relation_unit(relation_id, "microceph/0")
-    
+
     # Update with invalid JSON for mon_hosts
     harness.update_relation_data(
         relation_id,
@@ -328,7 +330,7 @@ def test_get_relation_data_handles_invalid_json(harness):
             "user_key": "secret",
         },
     )
-    
+
     # Should raise an error or return empty list, depending on implementation
     # Since the implementation doesn't handle JSON errors, this will raise
     with pytest.raises(json.JSONDecodeError):

@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-import yaml
 from kubernetes import client, config, utils
 from pytest_operator.plugin import OpsTest
 
@@ -107,14 +106,11 @@ async def microceph_model(ops_test: OpsTest, microceph_source: dict):
     else:
         logger.info(
             "Deploying microceph from charmhub (%s) in model %s",
-            microceph_source["channel"], model_name,
+            microceph_source["channel"],
+            model_name,
         )
-        await microceph_model.deploy(
-            MICROCEPH_APP, channel=microceph_source["channel"]
-        )
-    await microceph_model.wait_for_idle(
-        apps=[MICROCEPH_APP], status="active", timeout=20 * 60
-    )
+        await microceph_model.deploy(MICROCEPH_APP, channel=microceph_source["channel"])
+    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
 
     # Add loop OSDs
     microceph_units = microceph_model.applications[MICROCEPH_APP].units
@@ -123,9 +119,7 @@ async def microceph_model(ops_test: OpsTest, microceph_source: dict):
         action = await action.wait()
         assert action.status == "completed", f"add-osd failed on {unit.name}: {action.results}"
 
-    await microceph_model.wait_for_idle(
-        apps=[MICROCEPH_APP], status="active", timeout=20 * 60
-    )
+    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
 
     yield model_name
 
@@ -139,7 +133,6 @@ async def ceph_csi_offer(ops_test: OpsTest, microceph_model: str):
     offer_url = f"admin/{microceph_model}.{MICROCEPH_APP}"
     logger.info("Creating offer for %s:ceph-csi", MICROCEPH_APP)
 
-    model = ops_test.model_full_name
     rc, stdout, stderr = await ops_test.run(
         *shlex.split(f"juju offer -m {microceph_model} {MICROCEPH_APP}:ceph-csi")
     )
@@ -276,11 +269,11 @@ async def test_ceph_resources(ops_test: OpsTest, microceph_model: str):
     else:
         auth_entries = auth_data
     csi_clients = [
-        e for e in auth_entries
+        e
+        for e in auth_entries
         if isinstance(e, dict) and e.get("entity", "").startswith("client.csi-")
     ]
     assert len(csi_clients) > 0, (
-        f"No cephx auth entry starting with 'client.csi-' found "
-        f"among: {auth_entries}"
+        f"No cephx auth entry starting with 'client.csi-' found " f"among: {auth_entries}"
     )
     logger.info("Found cephx entries: %s", [e.get("entity") for e in csi_clients])
