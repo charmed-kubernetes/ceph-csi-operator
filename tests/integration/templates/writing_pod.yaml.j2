@@ -1,0 +1,20 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: write-test-{{ storage_class }}
+  namespace: default
+spec:
+  volumes:
+  - name: shared-data
+    persistentVolumeClaim:
+      claimName: pvc-test-{{ storage_class }}
+      readOnly: false
+  containers:
+    - name: write-test-{{ storage_class }}
+      #  rocks registry is used because we were hitting rate limits in dockerhub
+      image: rocks.canonical.com:443/cdk/ubuntu:jammy
+      command: ["/bin/bash", "-c", "echo '{{ data }}' > /data/juju"]
+      volumeMounts:
+      - name: shared-data
+        mountPath: /data
+  restartPolicy: Never
