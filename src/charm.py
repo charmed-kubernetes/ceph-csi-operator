@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Set, cast
 
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
-import ceph_csi
 import ops
 import ops.manifests.literals as manifest_literals
 from charms.reconciler import Reconciler
@@ -22,6 +21,7 @@ from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
 
+import ceph_csi
 import literals
 import utils
 from manifests_base import Manifests, SafeManifest
@@ -148,19 +148,20 @@ class CephCsiCharm(ops.CharmBase):
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
         )
-        self.framework.observe(
-            self.ceph_csi.on.ceph_csi_available, self._on_ceph_csi_available
-        )
-        self.framework.observe(
-            self.ceph_csi.on.ceph_csi_connected, self._on_ceph_csi_connected
-        )
-        self.framework.observe(
-            self.ceph_csi.on.ceph_csi_departed, self._on_ceph_csi_departed
-        )
+        self.framework.observe(self.ceph_csi.on.ceph_csi_available, self._on_ceph_csi_available)
+        self.framework.observe(self.ceph_csi.on.ceph_csi_departed, self._on_ceph_csi_departed)
         self.cli = utils.CephCLI(self)
         self.update_status = UpdateStatusHandler(self)
+        ceph_csi_events = [
+            self.ceph_csi.on.ceph_csi_available,
+            self.ceph_csi.on.ceph_csi_connected,
+            self.ceph_csi.on.ceph_csi_departed,
+        ]
         self.reconciler = Reconciler(
-            self, self.reconcile, exit_status=self.update_status.active_status
+            self,
+            self.reconcile,
+            exit_status=self.update_status.active_status,
+            custom_events=ceph_csi_events,
         )
 
         self.framework.observe(self.on.list_versions_action, self._list_versions)
@@ -348,19 +349,30 @@ class CephCsiCharm(ops.CharmBase):
     @property
     def ceph_context(self) -> Dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
-        csi_data = self.ceph_csi.get_relation_data()
-        fsid = csi_data.get("fsid") if csi_data else utils.fsid(self.cli)
-        user = csi_data.get("user_id") if csi_data else self.app.name
-        # Strip 'client.' prefix if present - ceph-csi adds it automatically
-        if user and user.startswith("client."):
-            user = user[7:]
-        user_key = csi_data.get("user_key") if csi_data else self.key
+        if csi_data := self.ceph_csi.get_relation_data():
+            # from ceph relation
+            fsid = csi_data.get("fsid")
+            user = csi_data.get("user_id")
+            # Strip 'client.' prefix if present - ceph-csi adds it automatically
+            if user and user.startswith("client."):
+                user = user[7:]
+            user_key = csi_data.get("user_key")
 
-        # Get filesystem listing - try CLI first, fall back to relation data
-        fs_list = utils.ls_ceph_fs(self.cli)
-        if not fs_list and csi_data:
-            fs_list = self._cephfs_from_relation(csi_data)
+            # Get filesystem listing - try CLI first, fall back to relation data
+            fs_list = utils.ls_ceph_fs(self.cli)
+            if not fs_list:
+                fs_list = self._cephfs_from_relation(csi_data)
 
+            rbd_pool = csi_data.get("rbd_pool")
+        else:
+            # from ceph-client relation
+            fsid = utils.fsid(self.cli)
+            user = self.app.name
+            user_key = self.key
+            fs_list = utils.ls_ceph_fs(self.cli)
+            rbd_pool = None
+
+        # anything common between the two
         return {
             "auth": self.auth,
             "fsid": fsid,
@@ -370,7 +382,7 @@ class CephCsiCharm(ops.CharmBase):
             "provisioner_replicas": self.provisioner_replicas,
             "enable_host_network": json.dumps(self.enable_host_network),
             CephStorageClass.FILESYSTEM_LISTING: fs_list,
-            "rbd_pool": csi_data.get("rbd_pool") if csi_data else None,
+            "rbd_pool": rbd_pool,
         }
 
     def _cephfs_from_relation(self, csi_data: Dict[str, Any]) -> List[CephFilesystem]:
@@ -381,13 +393,15 @@ class CephCsiCharm(ops.CharmBase):
 
         # Use Ceph's modern naming convention for pools
         # MicroCeph creates pools as: cephfs.{fs_name}.meta and cephfs.{fs_name}.data
-        return [CephFilesystem(
-            name=fs_name,
-            metadata_pool=f"cephfs.{fs_name}.meta",
-            metadata_pool_id=0,
-            data_pool_ids=[0],
-            data_pools=[f"cephfs.{fs_name}.data"],
-        )]
+        return [
+            CephFilesystem(
+                name=fs_name,
+                metadata_pool=f"cephfs.{fs_name}.meta",
+                metadata_pool_id=0,
+                data_pool_ids=[0],
+                data_pools=[f"cephfs.{fs_name}.data"],
+            )
+        ]
 
     @status.on_error(ops.WaitingStatus("Waiting for kubeconfig"))
     def check_kube_config(self) -> None:
@@ -661,10 +675,6 @@ class CephCsiCharm(ops.CharmBase):
         """Handle ceph-csi available event."""
         self._request_ceph_csi_workloads()
 
-    def _on_ceph_csi_connected(self, event: ops.EventBase) -> None:
-        """Handle ceph-csi connected event."""
-        self.reconciler.reconcile(event)
-
     def _on_ceph_csi_departed(self, event: ops.EventBase) -> None:
         """Handle ceph-csi departed event."""
         if self.unit.is_leader():
@@ -702,7 +712,7 @@ class CephCsiCharm(ops.CharmBase):
         """Check if the charm is being destroyed."""
         if cast(bool, self.stored.destroying):
             return True
-        if isinstance(event, (ops.StopEvent, ops.RemoveEvent)):
+        if isinstance(event, (ops.StopEvent, ops.RemoveEvent, ceph_csi.CephCSIDepartedEvent)):
             self.stored.destroying = True
             return True
         elif isinstance(event, ops.RelationBrokenEvent) and event.relation.name in (

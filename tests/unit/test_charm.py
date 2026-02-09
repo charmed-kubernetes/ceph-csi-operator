@@ -988,32 +988,6 @@ def test_on_ceph_csi_available_requests_both_workloads(harness):
         assert "cephfs" in called_workloads
 
 
-@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
-def test_on_ceph_csi_connected_triggers_reconcile(ceph_data, harness):
-    """Test _on_ceph_csi_connected handler triggers reconciliation."""
-    harness.begin()
-    ceph_data.return_value = {}
-
-    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
-    harness.add_relation_unit(relation_id, "microceph/0")
-
-    with mock.patch.object(harness.charm.reconciler, "reconcile") as mock_reconcile:
-        # Trigger ceph_csi_connected by providing all required data
-        harness.update_relation_data(
-            relation_id,
-            "microceph",
-            {
-                "fsid": "test-fsid",
-                "mon_hosts": '["10.0.0.1"]',
-                "user_id": "ceph-csi",
-                "user_key": "secret",
-            },
-        )
-
-        # Verify reconcile was called
-        assert mock_reconcile.called
-
-
 def test_request_ceph_csi_workloads_with_no_providers_enabled(harness):
     """Test _request_ceph_csi_workloads when no providers are enabled."""
     harness.begin()
