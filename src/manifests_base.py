@@ -2,14 +2,16 @@ import logging
 import pickle
 from functools import cached_property
 from hashlib import md5
-from typing import Any, Dict, Generator, List, Optional, Tuple, cast
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
 from lightkube.models.core_v1 import Toleration
 from lightkube.resources.core_v1 import Secret
-from ops.manifests import Addition, Manifests, Patch
+from ops.manifests import Addition, HashableResource, Manifests, Patch
 from ops.manifests.manipulations import Subtraction
+
+from literals import CONFIG_DEFAULT_STORAGE
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,9 @@ class SafeManifest(Manifests):
     @property
     def config(self) -> Dict[str, Any]:
         return {}  # pragma: no cover
+
+    def storage_classes(self) -> Set[HashableResource]:
+        return {res for res in self.resources if res.kind == "StorageClass"}
 
     def evaluate(self) -> Optional[str]: ...  # pragma: no cover
 
@@ -161,14 +166,28 @@ class StorageClassFactory(Addition):
         key = self.name_formatter_key
         return str(self.manifests.config.get(key) or "")
 
-    def name(self, context: Dict[str, Any] = {}) -> str:
-        """Create a storage-class name using the name formatter."""
+    def _format_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create format context for storage class name."""
         fmt_context = {
             "app": self.manifests.model.app.name,
             "namespace": self.manifests.config["namespace"],
-            **context,
+            "name": "",
+            "pool": "",
+            "pool-id": "",
+            **context,  ## Add or update with additional context
         }
-        return self.name_formatter.format(**fmt_context)
+        return fmt_context
+
+    def is_default(self, context: Dict[str, Any] = {}) -> bool:
+        """Determine if this storage class is the default."""
+        def_name: str = ""  # no default-storage configured
+        if def_fmt := self.manifests.config.get(CONFIG_DEFAULT_STORAGE):
+            def_name = def_fmt.format(**self._format_context(context))
+        return def_name == self.name(context)
+
+    def name(self, context: Dict[str, Any] = {}) -> str:
+        """Create a storage-class name using the name formatter."""
+        return self.name_formatter.format(**self._format_context(context))
 
     def update_params(self, params: Dict[str, str]) -> None:
         """Adjust parameters for storage class."""

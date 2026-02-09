@@ -7,10 +7,12 @@
 import contextlib
 import unittest.mock as mock
 
+import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
 import ops
 import pytest
 from lightkube.core.exceptions import ApiError
+from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
@@ -86,7 +88,7 @@ def reconcile_this(harness, method):
 
 
 @contextlib.contextmanager
-def mocked_handlers():
+def mocked_handlers(charm):
     handler_names = [
         "_destroying",
         "install_ceph_packages",
@@ -98,12 +100,12 @@ def mocked_handlers():
         "evaluate_manifests",
         "prevent_collisions",
         "install_manifests",
-        "_update_status",
     ]
 
-    handlers = [mock.patch(f"charm.CephCsiCharm.{name}") for name in handler_names]
-    yield dict(zip(handler_names, (h.start() for h in handlers)))
-    for handler in handlers:
+    handlers = {name: mock.patch(f"charm.CephCsiCharm.{name}") for name in handler_names}
+    handlers["update_status_run"] = mock.patch.object(charm.update_status, "run")
+    yield {h: patch.start() for h, patch in handlers.items()}
+    for handler in handlers.values():
         handler.stop()
 
 
@@ -115,7 +117,7 @@ def test_set_leader(harness):
     """
     harness.begin()
     harness.charm.reconciler.stored.reconciled = False  # Pretended to not be reconciled
-    with mocked_handlers() as handlers:
+    with mocked_handlers(harness.charm) as handlers:
         handlers["_destroying"].return_value = False
         harness.set_leader(True)
     assert harness.charm.unit.status.name == "active"
@@ -277,6 +279,38 @@ def test_evaluate_manifests_blocks(ceph_context, harness):
 
     assert harness.charm.unit.status.name == "blocked"
     assert harness.charm.unit.status.message == "Config manifests require the definition of 'auth'"
+
+
+@mock.patch("charm.SafeManifest.storage_classes")
+@mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
+def test_block_multiple_default_storage_classes(ceph_context, storage_classes, harness):
+    """Test that multiple default storage classes are blocked."""
+    harness.begin()
+    ceph_context.return_value = {
+        "auth": "cephx",
+        "fsid": "12345",
+        "kubernetes_key": "123",
+        "mon_hosts": ["10.0.0.1"],
+        "user": "ceph-csi",
+        "provisioner_replicas": 3,
+        "enable_host_network": "false",
+        "fsname": None,
+    }
+    ext4_sc = mock.MagicMock()
+    ext4_sc.name = "ceph-ext4"
+    ext4_sc.resource.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+    xfs_sc = mock.MagicMock()
+    xfs_sc.name = "ceph-xfs"
+    xfs_sc.resource.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+    missing_meta = mock.MagicMock()
+    missing_meta.name = "invalid"
+    missing_meta.resource.metadata = None
+    storage_classes.return_value = {ext4_sc, xfs_sc, missing_meta}
+    with pytest.raises(status.ReconcilerError) as ei:
+        harness.charm.evaluate_manifests()
+    assert str(ei.value) == "Multiple StorageClasses are marked as default: ceph-ext4, ceph-xfs"
 
 
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
@@ -585,6 +619,7 @@ def test_prevent_collisions(ceph_context, harness, caplog):
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
 def update_status_charm(ceph_context, harness):
     harness.set_leader(True)
+    harness.update_config({"default-storage": ""})
     harness.begin()
     harness.charm.reconciler.stored.reconciled = True
     harness.charm.stored.namespace = "non-default"
@@ -629,13 +664,110 @@ def test_update_status_changed_namespace(update_status_charm):
     )
 
 
-def test_update_status_ready(update_status_charm):
+def test_update_status_ready_with_cluster_warning(update_status_charm):
     update_status_charm.stored.namespace = "default"
     with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        default_annotated_meta = mock.Mock(spec_set=ObjectMeta)
+        default_annotated_meta.annotations = literals.DEFAULT_SC_ANNOTATION
+        mock_manifest.client.list.return_value = [
+            mock.Mock(spec_set=StorageClass, name="ceph-ext4", metadata=default_annotated_meta),
+            mock.Mock(spec_set=StorageClass, name="ceph-xfs", metadata=default_annotated_meta),
+        ]
+        mock_collector.manifests = {"manifest": mock_manifest}
         mock_collector.unready = []
         mock_collector.short_version = "short-version"
         mock_collector.long_version = "long-version"
         update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert (
+        update_status_charm.unit.status.message
+        == "Ready (Cluster contains multiple default StorageClasses)"
+    )
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_with_missing_default_warning(update_status_charm, harness):
+    harness.disable_hooks()
+    harness.update_config({"default-storage": "cephfs"})
+    harness.enable_hooks()
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+
+        # Create 3 mock StorageClasses
+        # 1. matches this charm's name but is not annotated as default
+        my_app_non_default = mock.Mock(name="ceph-ext4", spec_set=StorageClass)
+        my_app_non_default.metadata.labels = {"juju.io/application": harness.model.app.name}
+        my_app_non_default.metadata.annotations = {}
+
+        # 2. matches another charm's name but is not annotated as default
+        other_app_non_default = mock.Mock(name="ceph-alt-ext4", spec_set=StorageClass)
+        other_app_non_default.metadata.labels = {"juju.io/application": "ceph-csi-alternate"}
+
+        # 3. matches another charm's name and is annotated as default
+        other_app_default = mock.Mock(name="ceph-alt-xfs", spec_set=StorageClass)
+        other_app_default.metadata.labels = {"juju.io/application": "ceph-csi-alternate"}
+        other_app_default.metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+
+        mock_manifest.client.list.return_value = [
+            other_app_non_default,
+            other_app_default,
+            my_app_non_default,
+        ]
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert (
+        update_status_charm.unit.status.message
+        == "Ready ('cephfs' doesn't match any charm managed StorageClasses)"
+    )
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_with_default(update_status_charm, harness):
+    harness.disable_hooks()
+    harness.update_config({"default-storage": "cephfs"})
+    harness.enable_hooks()
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        default_metadata = mock.Mock(spec_set=ObjectMeta)
+        default_metadata.labels = {"juju.io/application": harness.model.app.name}
+        default_metadata.annotations = literals.DEFAULT_SC_ANNOTATION
+        mock_manifest.client.list.return_value = [
+            mock.Mock(spec_set=StorageClass, name="cephfs", metadata=default_metadata),
+        ]
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert update_status_charm.unit.status.message == "Ready"
+    assert update_status_charm.unit.status.name == "active"
+    assert update_status_charm.app._backend._workload_version == "short-version"
+    assert update_status_charm.app.status.message == "long-version"
+
+
+def test_update_status_ready_no_default(update_status_charm):
+    update_status_charm.stored.namespace = "default"
+    with mock.patch.object(update_status_charm, "collector") as mock_collector:
+        mock_manifest = mock.MagicMock()
+        mock_collector.manifests = {"manifest": mock_manifest}
+        mock_collector.unready = []
+        mock_collector.short_version = "short-version"
+        mock_collector.long_version = "long-version"
+        update_status_charm.on.update_status.emit()
+    mock_manifest.client.list.assert_called_once_with(StorageClass)
+    assert update_status_charm.unit.status.message == "Ready"
     assert update_status_charm.unit.status.name == "active"
     assert update_status_charm.app._backend._workload_version == "short-version"
     assert update_status_charm.app.status.message == "long-version"

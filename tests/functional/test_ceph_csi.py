@@ -19,7 +19,13 @@ from kubernetes import client, config, utils
 from kubernetes.stream import stream
 from pytest_operator.plugin import OpsTest
 
-from utils import render_j2_template, wait_for_pod, wait_for_pvc_resize
+from utils import (
+    render_j2_template,
+    set_test_config,
+    units_have_status,
+    wait_for_pod,
+    wait_for_pvc_resize,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,7 @@ TEST_PATH = Path(__file__).parent
 TEMPLATE_DIR = TEST_PATH / "templates"
 TEST_OVERLAY = TEST_PATH / "overlay.yaml"
 
+DEFAULT_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
 READING_POD_TEMPLATE = "reading_pod.yaml.j2"
 REPORTER_POD_TEMPLATE = "reporter_pod.yaml.j2"
@@ -105,7 +112,7 @@ async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTes
 
     async with ops_test.fast_forward("60s"):
         await ops_test.model.wait_for_idle(
-            apps=ready_apps(ops_test), wait_for_active=True, timeout=30 * 60
+            apps=ready_apps(ops_test), status="active", timeout=30 * 60
         )
     for unit in ceph_csi_app.units:
         assert unit.workload_status == "active"
@@ -133,16 +140,6 @@ async def test_rbac_name_formatter(kube_config: Path, ops_test):
     assert len(cluster_roles) == 2
     for role in cluster_roles:
         assert role.metadata.name.endswith("-formatter")
-
-
-@pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
-@pytest.mark.usefixtures("cleanup_k8s", "ops_test")
-async def test_storage_class(kube_config: Path, storage_class: str):
-    """Test that ceph can be used to create persistent volume.
-
-    Isolated tests for xfs and ext4, cephfs comes later.
-    """
-    await run_test_storage_class(kube_config, storage_class)
 
 
 @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
@@ -301,62 +298,6 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
         core_api.delete_namespaced_persistent_volume_claim(storage["metadata"]["name"], namespace)
 
 
-async def test_update_default_storage_class(kube_config: Path, ops_test: OpsTest):
-    """Test that updating "default-storage" configuration takes effect in k8s resources."""
-
-    async def assert_is_default_class(expected_default: str, api: client.StorageV1Api):
-        for class_ in api.list_storage_class().items:
-            sc = class_.metadata.name
-            annotations = class_.metadata.annotations
-            is_default = annotations and annotations[default_property]
-            if sc == expected_default:
-                assert is_default == "true", f"Expected to find {sc} as the default"
-            else:
-                assert is_default in (
-                    "false",
-                    None,
-                ), f"Expected to find {sc} not the default"
-
-    default_property = "storageclass.kubernetes.io/is-default-class"
-    expected_classes = ["ceph-xfs", "ceph-ext4"]
-    ceph_csi_app = ops_test.model.applications["ceph-csi"]
-
-    config.load_kube_config(str(kube_config))
-    storage_api = client.StorageV1Api()
-
-    # Scan available StorageClasses and make sure that all expected classes are present.
-    classes_to_test = []
-    original_default = None
-    logger.debug("Discovering available StorageClasses")
-    for storage_class in storage_api.list_storage_class().items:
-        name = storage_class.metadata.name
-        annotations = storage_class.metadata.annotations
-        if annotations:
-            is_default = annotations.get(default_property) == "true"
-        else:
-            is_default = False
-        classes_to_test.append(name)
-        logger.debug("StorageClass: %s; isDefault: %s", name, is_default)
-
-        if name not in expected_classes:
-            pytest.fail("Unexpected storage class in the cluster: {}".format(name))
-
-        if is_default:
-            original_default = name
-
-    # move currently active default class to last place so we end up with the same
-    # cluster setting after the test
-    classes_to_test.remove(original_default)
-    classes_to_test.append(original_default)
-
-    # Change 'default-storage' config in charm and make sure it has effect on k8s cluster.
-    for storage_class in classes_to_test:
-        logger.info("Setting %s StorageClass to be default.", storage_class)
-        await ceph_csi_app.set_config({"default-storage": storage_class})
-        await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=5 * 60)
-        await assert_is_default_class(storage_class, storage_api)
-
-
 async def test_host_networking(kube_config: Path, namespace: str, ops_test):
     """Test that ceph-csi deployments can be run with host networking."""
     config.load_kube_config(str(kube_config))
@@ -473,3 +414,135 @@ async def test_duplicate_ceph_csi(ops_test: OpsTest, namespace: str, kube_config
             apps=[CEPH_CSI_ALT], wait_for_exact_units=0, timeout=5 * 60
         )
         await app.set_config(current_config)
+
+
+@pytest.fixture(scope="class")
+def storage_api(kube_config: Path):
+    """Fixture which provides kubernetes storage api client."""
+    config.load_kube_config(str(kube_config))
+    return client.StorageV1Api()
+
+
+@pytest.fixture(scope="function")
+def mock_storage_class(request, storage_api: client.StorageV1Api):
+    camel = request.node.name.lower().replace("_", "")
+    body = client.V1StorageClass(
+        api_version="storage.k8s.io/v1",
+        kind="StorageClass",
+        metadata=client.V1ObjectMeta(name=camel, annotations={DEFAULT_ANNOTATION: "true"}),
+        provisioner="doesNotExist",
+        reclaim_policy="Retain",
+        parameters={},
+        volume_binding_mode="Immediate",  # Or "WaitForFirstConsumer"
+    )
+    sc = storage_api.create_storage_class(body=body)
+
+    try:
+        yield sc
+    finally:
+        storage_api.delete_storage_class(name=camel)
+
+
+class TestStorageClass:
+    """Test suite for storage class related tests."""
+
+    async def test_update_default(self, storage_api: client.StorageV1Api, ops_test: OpsTest):
+        """Test that updating "default-storage" configuration takes effect in k8s resources."""
+
+        async def assert_is_default_class(expected_default: str, api: client.StorageV1Api):
+            for class_ in api.list_storage_class().items:
+                sc = class_.metadata.name
+                annotations = class_.metadata.annotations
+                is_default = annotations and annotations[DEFAULT_ANNOTATION]
+                if sc == expected_default:
+                    assert is_default == "true", f"Expected to find {sc} as the default"
+                else:
+                    assert is_default in (
+                        "false",
+                        None,
+                    ), f"Expected to find {sc} not the default"
+
+        expected_classes = ["ceph-xfs", "ceph-ext4"]
+        ceph_csi_app = ops_test.model.applications["ceph-csi"]
+
+        # Scan available StorageClasses and make sure that all expected classes are present.
+        classes_to_test = []
+        original_default = None
+        logger.debug("Discovering available StorageClasses")
+        for storage_class in storage_api.list_storage_class().items:
+            name = storage_class.metadata.name
+            anno = storage_class.metadata.annotations
+            if is_default := anno and anno.get(DEFAULT_ANNOTATION) == "true":
+                original_default = name
+
+            classes_to_test.append(name)
+            logger.debug("StorageClass: %s; isDefault: %s", name, is_default)
+
+            if name not in expected_classes:
+                pytest.fail("Unexpected storage class in the cluster: {}".format(name))
+
+        # move currently active default class to last place so we end up with the same
+        # cluster setting after the test
+        classes_to_test.remove(original_default)
+        classes_to_test.append(original_default)
+
+        # Change 'default-storage' config in charm and make sure it has effect on k8s cluster.
+        for storage_class in classes_to_test:
+            logger.info("Setting %s StorageClass to be default.", storage_class)
+            await ceph_csi_app.set_config({"default-storage": storage_class})
+            await ops_test.model.wait_for_idle(apps=["ceph-csi"], timeout=5 * 60)
+            await assert_is_default_class(storage_class, storage_api)
+
+    @pytest.mark.parametrize("storage_class", ["ceph-xfs", "ceph-ext4"])
+    @pytest.mark.usefixtures("cleanup_k8s", "ops_test")
+    async def test_supported(self, kube_config: Path, storage_class: str):
+        """Test that ceph can be used to create persistent volume.
+
+        Isolated tests for xfs and ext4, cephfs comes later.
+        """
+        await run_test_storage_class(kube_config, storage_class)
+
+    @pytest.mark.usefixtures("mock_storage_class")
+    async def test_too_many_defaults(self, ops_test: OpsTest):
+        """Test that enabling more than one default storage class warns the user."""
+        app = ops_test.model.applications["ceph-csi"]
+        async with ops_test.fast_forward("10s"):
+            await ops_test.model.block_until(
+                units_have_status(
+                    app, "active", "Cluster contains multiple default StorageClasses"
+                ),
+                timeout=60,
+            )
+
+    async def test_no_matching_default(self, request, ops_test: OpsTest):
+        """Test that setting default-storage to a non-existing storage warns the user."""
+        app = ops_test.model.applications["ceph-csi"]
+        async with set_test_config(app, {"default-storage": request.node.name}):
+            msg = f"'{request.node.name}' doesn't match any charm managed StorageClasses"
+            await ops_test.model.wait_for_idle(apps=[app.name], timeout=5 * 60)
+            await ops_test.model.block_until(
+                units_have_status(app, "active", msg),
+                timeout=60,
+            )
+        await ops_test.model.wait_for_idle(apps=[app.name], status="active", timeout=5 * 60)
+
+    # TODO: Testing multiple cephfs pools
+    #
+    # Create a second data pool for cephfs
+    #     $ ceph osd pool create ceph-fs_data_ci 2
+    #     $ ceph fs add_data_pool ceph-fs ceph-fs_data_ci
+    # config
+    #     cephfs-enabled=true
+    # Verify that the charm cannot create a unique storage class name formatter
+    # config
+    #     cephfs-storage-class-name-formatter=cephfs-{name}-{pool-id}
+    # Verify that the cluster comes up satisfied
+    # config
+    #     default-storage=cephfs-{name}-{pool-id}
+    # Verify that the status message errors about multiple default storage classes
+    # clean up the extra pool after test
+    #     $ ceph osd pool stats ceph-fs_data_ci
+    #     $ ceph fs rm_data_pool ceph-fs ceph-fs_data_ci
+    #     $ ceph osd pool stats ceph-fs_data_ci
+    #     $ ceph tell mon.* injectargs --mon-allow-pool-delete=true
+    #     $ ceph osd pool delete ceph-fs_data_ci ceph-fs_data_ci --yes-i-really-really-mean-it
