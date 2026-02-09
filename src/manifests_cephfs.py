@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import ConfigRegistry, ManifestLabel
+from ops.manifests.manipulations import ValidateResourceNames
 
 import literals
 from manifests_base import (
@@ -216,6 +217,7 @@ class CephFSManifests(SafeManifest):
                 CSIDriverAdjustments(self, self.DRIVER_NAME),
                 RbacAdjustments(self),
                 RemoveResource(self),
+                ValidateResourceNames(self),
                 AdjustNamespace(self),
                 ConfigureLivenessPrometheus(
                     self, "Deployment", "csi-cephfsplugin-provisioner", "cephfsplugin-provisioner"
