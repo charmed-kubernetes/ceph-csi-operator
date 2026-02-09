@@ -5,7 +5,7 @@
 CEPHFS_SUBVOLUMEGROUP = "csi"
 
 # Name of the relation from charmcraft.yaml
-CEPH_CSI_RELATION = "ceph-csi"
+CEPH_CSI_RELATION = "ceph"
 CEPH_CLIENT_RELATION = "ceph-client"
 
 # List of required Ceph packages used by the charm

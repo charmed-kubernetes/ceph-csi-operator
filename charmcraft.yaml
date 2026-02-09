@@ -422,7 +422,7 @@ actions:
     - name
 
 requires:
-  ceph-csi:
+  ceph:
     interface: ceph-csi
   ceph-client:
     interface: ceph-client

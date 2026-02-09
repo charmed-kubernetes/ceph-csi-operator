@@ -6,7 +6,7 @@ interface.
 Import `CephCSIRequires` in your charm, with the charm object and the relation
 name:
     - self
-    - "ceph-csi"
+    - "ceph"
 
 Three events are also available to respond to:
     - ceph_csi_available
@@ -22,7 +22,7 @@ import charms.ceph_csi.v0.ceph_csi as ceph_csi
 class CephCSIClientCharm(CharmBase):
     def __init__(self, *args):
         super().__init__(*args)
-        self._ceph_csi = ceph_csi.CephCSIRequires(self, "ceph-csi")
+        self._ceph_csi = ceph_csi.CephCSIRequires(self, "ceph")
         self.framework.observe(
             self._ceph_csi.on.ceph_csi_available,
             self._on_ceph_csi_available,
