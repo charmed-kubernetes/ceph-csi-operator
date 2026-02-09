@@ -148,8 +148,6 @@ class CephCsiCharm(ops.CharmBase):
         self.framework.observe(
             self.ceph_client.on.broker_available, self._on_ceph_client_broker_available
         )
-        self.framework.observe(self.ceph_csi.on.ceph_csi_available, self._on_ceph_csi_available)
-        self.framework.observe(self.ceph_csi.on.ceph_csi_departed, self._on_ceph_csi_departed)
         self.cli = utils.CephCLI(self)
         self.update_status = UpdateStatusHandler(self)
         ceph_csi_events = [
@@ -302,8 +300,8 @@ class CephCsiCharm(ops.CharmBase):
     def ceph_user(self) -> str:
         """Return the Ceph user name for CLI operations."""
         csi_data = self.ceph_csi.get_relation_data()
-        if csi_data and csi_data.get("user_id"):
-            return csi_data["user_id"]
+        if csi_data and (user := csi_data.get("user_id")):
+            return user
         return self.app.name
 
     @status.on_error(ops.BlockedStatus("Failed to install ceph apt packages."))
@@ -353,14 +351,11 @@ class CephCsiCharm(ops.CharmBase):
             # from ceph relation
             fsid = csi_data.get("fsid")
             user = csi_data.get("user_id")
-            # Strip 'client.' prefix if present - ceph-csi adds it automatically
-            if user and user.startswith("client."):
-                user = user[7:]
             user_key = csi_data.get("user_key")
 
             # Get filesystem listing - try CLI first, fall back to relation data
             fs_list = utils.ls_ceph_fs(self.cli)
-            if not fs_list:
+            if not fs_list and csi_data:
                 fs_list = self._cephfs_from_relation(csi_data)
 
             rbd_pool = csi_data.get("rbd_pool")
@@ -670,15 +665,6 @@ class CephCsiCharm(ops.CharmBase):
             workloads.append("cephfs")
         if workloads:
             self.ceph_csi.request_workloads(workloads)
-
-    def _on_ceph_csi_available(self, event: ops.EventBase) -> None:
-        """Handle ceph-csi available event."""
-        self._request_ceph_csi_workloads()
-
-    def _on_ceph_csi_departed(self, event: ops.EventBase) -> None:
-        """Handle ceph-csi departed event."""
-        if self.unit.is_leader():
-            self._purge_all_manifests()
 
     def _purge_all_manifests(self) -> None:
         """Purge resources created by this charm."""

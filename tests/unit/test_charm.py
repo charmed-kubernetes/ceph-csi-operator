@@ -914,28 +914,8 @@ def test_ceph_context_uses_rbd_pool_from_ceph_csi_relation(ceph_data, mock_ls_ce
     assert context["kubernetes_key"] == "csi-key"
 
 
-def test_on_ceph_csi_available_requests_workloads(harness):
-    """Test _on_ceph_csi_available handler requests workloads."""
-    harness.begin()
-    harness.set_leader(True)
-
-    # Add ceph-csi relation
-    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
-    harness.add_relation_unit(relation_id, "microceph/0")
-
-    # Mock request_workloads to track calls
-    with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
-        # Trigger ceph_csi_available event
-        harness.update_relation_data(relation_id, "microceph", {"fsid": "test"})
-
-        # Verify workloads were requested
-        mock_request.assert_called_once()
-        called_workloads = mock_request.call_args[0][0]
-        assert "rbd" in called_workloads or "cephfs" in called_workloads
-
-
-def test_on_ceph_csi_available_requests_rbd_workload(harness):
-    """Test _on_ceph_csi_available requests rbd workload when enabled."""
+def test_request_ceph_csi_workloads_requests_rbd_workload(harness):
+    """Test _request_ceph_csi_workloads requests rbd workload when enabled."""
     harness.begin()
     harness.set_leader(True)
     harness.update_config({"ceph-rbd-enable": True, "cephfs-enable": False})
@@ -944,7 +924,7 @@ def test_on_ceph_csi_available_requests_rbd_workload(harness):
     harness.add_relation_unit(relation_id, "microceph/0")
 
     with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
-        harness.update_relation_data(relation_id, "microceph", {"fsid": "test"})
+        harness.charm._request_ceph_csi_workloads()
 
         mock_request.assert_called_once()
         called_workloads = mock_request.call_args[0][0]
@@ -952,8 +932,8 @@ def test_on_ceph_csi_available_requests_rbd_workload(harness):
         assert "cephfs" not in called_workloads
 
 
-def test_on_ceph_csi_available_requests_cephfs_workload(harness):
-    """Test _on_ceph_csi_available requests cephfs workload when enabled."""
+def test_request_ceph_csi_workloads_requests_cephfs_workload(harness):
+    """Test _request_ceph_csi_workloads requests cephfs workload when enabled."""
     harness.begin()
     harness.set_leader(True)
     harness.update_config({"ceph-rbd-enable": False, "cephfs-enable": True})
@@ -962,7 +942,7 @@ def test_on_ceph_csi_available_requests_cephfs_workload(harness):
     harness.add_relation_unit(relation_id, "microceph/0")
 
     with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
-        harness.update_relation_data(relation_id, "microceph", {"fsid": "test"})
+        harness.charm._request_ceph_csi_workloads()
 
         mock_request.assert_called_once()
         called_workloads = mock_request.call_args[0][0]
@@ -970,8 +950,8 @@ def test_on_ceph_csi_available_requests_cephfs_workload(harness):
         assert "rbd" not in called_workloads
 
 
-def test_on_ceph_csi_available_requests_both_workloads(harness):
-    """Test _on_ceph_csi_available requests both workloads when both enabled."""
+def test_request_ceph_csi_workloads_requests_both_workloads(harness):
+    """Test _request_ceph_csi_workloads requests both workloads when both enabled."""
     harness.begin()
     harness.set_leader(True)
     harness.update_config({"ceph-rbd-enable": True, "cephfs-enable": True})
@@ -980,7 +960,7 @@ def test_on_ceph_csi_available_requests_both_workloads(harness):
     harness.add_relation_unit(relation_id, "microceph/0")
 
     with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
-        harness.update_relation_data(relation_id, "microceph", {"fsid": "test"})
+        harness.charm._request_ceph_csi_workloads()
 
         mock_request.assert_called_once()
         called_workloads = mock_request.call_args[0][0]
