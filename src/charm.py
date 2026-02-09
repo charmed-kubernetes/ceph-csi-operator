@@ -469,6 +469,7 @@ class CephCsiCharm(ops.CharmBase):
         self.check_namespace()
         self.check_ceph_client()
         self.cli.configure()
+        self._request_ceph_csi_workloads()
         self._ceph_rbd_enabled()
         self._cephfs_enabled()
         hash = self.evaluate_manifests()
@@ -505,9 +506,19 @@ class CephCsiCharm(ops.CharmBase):
         self.request_ceph_permissions()
         self.reconciler.reconcile(event)
 
+    def _request_ceph_csi_workloads(self) -> None:
+        """Request workloads based on charm config."""
+        workloads = []
+        if self.config["ceph-rbd-enable"]:
+            workloads.append("rbd")
+        if self.config["cephfs-enable"]:
+            workloads.append("cephfs")
+        if workloads:
+            self.ceph_csi.request_workloads(workloads)
+
     def _on_ceph_csi_available(self, event: ops.EventBase) -> None:
         """Handle ceph-csi available event."""
-        self.ceph_csi.request_workloads(["rbd", "cephfs"])
+        self._request_ceph_csi_workloads()
 
     def _on_ceph_csi_connected(self, event: ops.EventBase) -> None:
         """Handle ceph-csi connected event."""
