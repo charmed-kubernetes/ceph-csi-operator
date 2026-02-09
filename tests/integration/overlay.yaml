@@ -1,0 +1,16 @@
+description: Overlay for ceph-csi cross-model integration with microceph
+series: jammy
+applications:
+  k8s:
+    num_units: 1
+    expose: true
+    options:
+      local-storage-enabled: false
+  ceph-csi:
+    charm: {{ charm }}
+    channel: {{ channel | default("null", true) }}
+    options:
+      provisioner-replicas: 1
+      namespace: {{ namespace }}
+relations:
+- [ceph-csi:kubernetes-info, k8s]
