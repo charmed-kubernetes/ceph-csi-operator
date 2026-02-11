@@ -36,9 +36,12 @@ jobs:
     needs: charm-source
     runs-on: self-hosted
     timeout-minutes: 120
+    strategy:
+      matrix:
+        style: [test_microceph, test_charmed_ceph]
     env:
       # Set default values
-      EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest"
+      EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest -k ${{ matrix.style }}"
     steps:
       - name: Check out code
         uses: actions/checkout@v4
