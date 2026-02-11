@@ -1,4 +1,3 @@
-# Copyright 2021 Martin Kalcok
 # Copyright 2025 Canonical Ltd.
 # See LICENSE file for licensing details.
 """Pytest fixtures for functional tests."""
