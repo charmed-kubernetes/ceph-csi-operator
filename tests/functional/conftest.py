@@ -1,10 +1,12 @@
 # Copyright 2021 Martin Kalcok
+# Copyright 2025 Canonical Ltd.
 # See LICENSE file for licensing details.
 """Pytest fixtures for functional tests."""
 
 #  pylint: disable=W0621
 
 import logging
+import os
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -17,6 +19,9 @@ from pytest_operator.plugin import OpsTest
 logger = logging.getLogger(__name__)
 
 
+MICROCEPH_CHANNEL = "latest/edge/csi"
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--ceph-csi-channel",
@@ -24,12 +29,48 @@ def pytest_addoption(parser):
         default=None,
         help="Optional charm channel for ceph-csi deployment",
     )
+    parser.addoption(
+        "--microceph-charm",
+        action="store",
+        default=None,
+        help="Path to a pre-built microceph charm artifact (overrides charmhub).",
+    )
+    parser.addoption(
+        "--microceph-channel",
+        action="store",
+        default=None,
+        help=f"Charmhub channel for microceph (default: {MICROCEPH_CHANNEL}).",
+    )
 
 
 @pytest.fixture(scope="session")
 def ceph_csi_channel(pytestconfig):
     """Return the ceph-csi channel if specified."""
     return pytestconfig.getoption("ceph_csi_channel")
+
+
+@pytest.fixture(scope="session")
+def microceph_source(pytestconfig) -> dict:
+    """Return microceph deploy source: either a local path or charmhub channel.
+
+    Returns a dict with either {"charm": Path} or {"channel": str}.
+    Priority: --microceph-charm > MICROCEPH_CHARM env > --microceph-channel > default channel.
+    """
+    charm_path = pytestconfig.getoption("microceph_charm") or os.environ.get(
+        "MICROCEPH_CHARM"
+    )
+    if charm_path:
+        path = Path(charm_path).resolve()
+        if not path.exists():
+            pytest.fail(f"microceph charm not found at {path}")
+        return {"charm": path}
+
+    channel = (
+        pytestconfig.getoption("microceph_channel")
+        or os.environ.get("MICROCEPH_CHANNEL")
+        or MICROCEPH_CHANNEL
+    )
+    return {"channel": channel}
 
 
 @pytest.fixture(scope="module")
@@ -92,7 +133,9 @@ async def cleanup_k8s(kube_config):
         if pvc_name.startswith(pvc_prefix):
             try:
                 logger.info("Removing PersistentVolumeClaim %s", pvc_name)
-                core_api.delete_namespaced_persistent_volume_claim(pvc_name, pod_namespace)
+                core_api.delete_namespaced_persistent_volume_claim(
+                    pvc_name, pod_namespace
+                )
             except client.ApiException as exc:
                 if exc.status != 404:
                     raise exc

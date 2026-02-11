@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 LATEST_RELEASE = ""
 TEST_PATH = Path(__file__).parent
 TEMPLATE_DIR = TEST_PATH / "templates"
-TEST_OVERLAY = TEST_PATH / "overlay.yaml"
+TEST_OVERLAY = TEST_PATH / "microceph.yaml"
 
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
 READING_POD_TEMPLATE = "reading_pod.yaml.j2"
@@ -52,7 +52,9 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
     k8s_api_client = client.ApiClient()
     core_api = client.CoreV1Api()
 
-    storage = render_j2_template(TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class)
+    storage = render_j2_template(
+        TEMPLATE_DIR, STORAGE_TEMPLATE, storage_class=storage_class
+    )
     reading_pod = render_j2_template(
         TEMPLATE_DIR, READING_POD_TEMPLATE, storage_class=storage_class
     )
@@ -72,20 +74,28 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
 
         logger.info("Creating Writer Pod %s", writing_pod_name)
         utils.create_from_dict(k8s_api_client, writing_pod)
-        wait_for_pod(core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE)
+        wait_for_pod(
+            core_api, writing_pod_name, namespace, target_state=SUCCESS_POD_STATE
+        )
 
         logger.info("Creating Reader Pod %s", reading_pod_name)
         utils.create_from_dict(k8s_api_client, reading_pod)
-        wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
+        wait_for_pod(
+            core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE
+        )
 
         pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
-        assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
+        assert (
+            test_payload in pod_log
+        ), "Pod {} failed to read data written by pod {}".format(
             reading_pod_name, writing_pod_name
         )
     finally:
         core_api.delete_namespaced_pod(reading_pod_name, namespace)
         core_api.delete_namespaced_pod(writing_pod_name, namespace)
-        core_api.delete_namespaced_persistent_volume_claim(storage["metadata"]["name"], namespace)
+        core_api.delete_namespaced_persistent_volume_claim(
+            storage["metadata"]["name"], namespace
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,16 +120,22 @@ async def microceph_model(ops_test: OpsTest, microceph_source: dict):
             model_name,
         )
         await microceph_model.deploy(MICROCEPH_APP, channel=microceph_source["channel"])
-    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
+    await microceph_model.wait_for_idle(
+        apps=[MICROCEPH_APP], status="active", timeout=20 * 60
+    )
 
     # Add loop OSDs
     microceph_units = microceph_model.applications[MICROCEPH_APP].units
     for unit in microceph_units:
         action = await unit.run_action("add-osd", **{"loop-spec": LOOP_OSD_SPEC})
         action = await action.wait()
-        assert action.status == "completed", f"add-osd failed on {unit.name}: {action.results}"
+        assert (
+            action.status == "completed"
+        ), f"add-osd failed on {unit.name}: {action.results}"
 
-    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
+    await microceph_model.wait_for_idle(
+        apps=[MICROCEPH_APP], status="active", timeout=20 * 60
+    )
 
     yield model_name
 
@@ -178,7 +194,9 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_offe
 
     logger.info("Deploying ceph-csi integration test bundle.")
     model = ops_test.model_full_name
-    cmd = f"juju deploy -m {model} {bundle} " + " ".join(f"--overlay={f}" for f in overlays)
+    cmd = f"juju deploy -m {model} {bundle} " + " ".join(
+        f"--overlay={f}" for f in overlays
+    )
     rc, stdout, stderr = await ops_test.run(*shlex.split(cmd))
     assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
     logger.info(stdout)
@@ -202,7 +220,9 @@ async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_offe
             return False
         return any(expected in u.workload_status_message for u in ceph_csi.units)
 
-    await ops_test.model.block_until(ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5)
+    await ops_test.model.block_until(
+        ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5
+    )
 
 
 @pytest.mark.abort_on_fail
@@ -274,6 +294,7 @@ async def test_ceph_resources(ops_test: OpsTest, microceph_model: str):
         if isinstance(e, dict) and e.get("entity", "").startswith("client.csi-")
     ]
     assert len(csi_clients) > 0, (
-        f"No cephx auth entry starting with 'client.csi-' found " f"among: {auth_entries}"
+        f"No cephx auth entry starting with 'client.csi-' found "
+        f"among: {auth_entries}"
     )
     logger.info("Found cephx entries: %s", [e.get("entity") for e in csi_clients])
