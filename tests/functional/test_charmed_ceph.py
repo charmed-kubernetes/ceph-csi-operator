@@ -53,19 +53,12 @@ def ready_apps(ops_test: OpsTest):
 
 
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None):
+async def test_build_and_deploy(
+    ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None, ceph_csi_charm: Path | str
+):
     """Build ceph-csi charm and deploy testing model."""
-    if ceph_csi_channel:
-        logger.info(f"Using ceph-csi channel: {ceph_csi_channel}")
-        charm = "ceph-csi"
-        channel = ceph_csi_channel
-    else:
-        channel = None
-        charm = next(Path(".").glob("ceph-csi*.charm"), None)
-        if not charm:
-            logger.info("Building ceph-csi charm.")
-            charm = await ops_test.build_charm(".")
-        charm = charm.resolve() if charm else None
+    charm = ceph_csi_charm
+    channel = ceph_csi_channel
 
     bundle_vars = {
         "charm": charm,

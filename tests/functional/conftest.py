@@ -6,6 +6,7 @@
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -68,6 +69,47 @@ def microceph_source(pytestconfig) -> dict:
         or MICROCEPH_CHANNEL
     )
     return {"channel": channel}
+
+
+@pytest_asyncio.fixture(scope="module")
+async def ceph_csi_charm(
+    ops_test: OpsTest, ceph_csi_channel: str | None
+) -> AsyncGenerator[Path | str, None]:
+    """Build or locate ceph-csi charm and return Path to it.
+
+    If ceph_csi_channel is provided, returns the string "ceph-csi" to deploy from charmhub.
+    Otherwise, looks for a pre-built charm file in the workspace, builds if not found,
+    and copies it to ops_test.tmp_path / "charms" to avoid snap confinement issues.
+
+    Returns:
+        Path object to the charm file, or "ceph-csi" string for charmhub deployment.
+    """
+    if ceph_csi_channel:
+        logger.info(f"Using ceph-csi channel: {ceph_csi_channel}")
+        yield "ceph-csi"
+        return
+
+    # Look for existing charm in workspace
+    charm_file = next(Path(".").glob("ceph-csi*.charm"), None)
+
+    if not charm_file:
+        logger.info("Building ceph-csi charm.")
+        charm_file = await ops_test.build_charm(".")
+
+    charm_file = charm_file.resolve() if charm_file else None
+
+    if not charm_file:
+        pytest.fail("Failed to build or locate ceph-csi charm")
+
+    # Copy charm to pytest temp space to avoid snap confinement issues
+    charm_dir = ops_test.tmp_path / "charms"
+    charm_dir.mkdir(exist_ok=True, parents=True)
+    charm_dest = charm_dir / charm_file.name
+
+    logger.info(f"Copying charm from {charm_file} to {charm_dest}")
+    shutil.copy2(charm_file, charm_dest)
+
+    yield charm_dest
 
 
 @pytest.fixture(scope="module")
