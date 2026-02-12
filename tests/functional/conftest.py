@@ -55,9 +55,7 @@ def microceph_source(pytestconfig) -> dict:
     Returns a dict with either {"charm": Path} or {"channel": str}.
     Priority: --microceph-charm > MICROCEPH_CHARM env > --microceph-channel > default channel.
     """
-    charm_path = pytestconfig.getoption("microceph_charm") or os.environ.get(
-        "MICROCEPH_CHARM"
-    )
+    charm_path = pytestconfig.getoption("microceph_charm") or os.environ.get("MICROCEPH_CHARM")
     if charm_path:
         path = Path(charm_path).resolve()
         if not path.exists():
@@ -132,9 +130,7 @@ async def cleanup_k8s(kube_config):
         if pvc_name.startswith(pvc_prefix):
             try:
                 logger.info("Removing PersistentVolumeClaim %s", pvc_name)
-                core_api.delete_namespaced_persistent_volume_claim(
-                    pvc_name, pod_namespace
-                )
+                core_api.delete_namespaced_persistent_volume_claim(pvc_name, pod_namespace)
             except client.ApiException as exc:
                 if exc.status != 404:
                     raise exc
