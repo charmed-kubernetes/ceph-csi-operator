@@ -13,6 +13,11 @@ jobs:
     outputs:
       channel: ${{ steps.charm.outputs.channel }}
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Read charmcraft version file
+        id: charmcraft
+        run: echo "channel=$(cat .charmcraft-channel)" >> $GITHUB_OUTPUT
       - name: Pull-Request charm channel
         id: charm
         run: |
@@ -31,6 +36,17 @@ jobs:
             echo "Using empty channel for pull request"
           fi
           echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+      - if: ${{ !steps.charm.outputs.channel }}
+        name: Build ceph-csi charm
+        uses: canonical/craft-actions/charmcraft-pack@main
+        with:
+          charmcraft-channel: ${{ steps.charmcraft.outputs.channel }}
+      - if: ${{ !steps.charm.outputs.channel }}
+        name: Upload charm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceph-csi-charm
+          path: ceph-csi_*.charm
   integration-test:
     name: VSphere Integration Test
     needs: charm-source
@@ -45,6 +61,11 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+      - if: ${{ !needs.charm-source.outputs.channel }}
+        name: Download charm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ceph-csi-charm
       - name: Read charmcraft version file
         id: charmcraft
         run: echo "channel=$(cat .charmcraft-channel)" >> $GITHUB_OUTPUT
