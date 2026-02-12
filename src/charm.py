@@ -578,8 +578,8 @@ class CephCsiCharm(ops.CharmBase):
 
         csi_data = self.ceph_csi.get_relation_data()
         if csi_data:
-            expected_relation_keys = ("fsid", "mon_hosts", "user_id", "user_key")
-            missing_data = [key for key in expected_relation_keys if not csi_data.get(key)]
+            expected_csi_keys = ("fsid", "mon_hosts", "user_id", "user_key")
+            missing_data = [key for key in expected_csi_keys if not csi_data.get(key)]
             if missing_data:
                 logger.warning("ceph-csi relation is missing data: %s", missing_data)
                 status.add(ops.WaitingStatus("ceph-csi relation is missing data."))
@@ -597,9 +597,9 @@ class CephCsiCharm(ops.CharmBase):
             raise status.ReconcilerError("Missing relation: ceph-client")
 
         relation_data = self.ceph_client.get_relation_data()
-        expected_relation_keys = ("auth", "key", "mon_hosts")
+        expected_client_keys = ("auth", "key", "mon_hosts")
 
-        missing_data = [key for key in expected_relation_keys if key not in relation_data]
+        missing_data = [key for key in expected_client_keys if key not in relation_data]
         if missing_data:
             logger.warning("Ceph relation is missing data: %s", missing_data)
             status.add(ops.WaitingStatus("Ceph relation is missing data."))
