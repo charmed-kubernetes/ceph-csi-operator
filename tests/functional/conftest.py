@@ -78,8 +78,8 @@ async def ceph_csi_charm(
     """Build or locate ceph-csi charm and return Path to it.
 
     If ceph_csi_channel is provided, returns the string "ceph-csi" to deploy from charmhub.
-    Otherwise, looks for a pre-built charm file in the workspace, builds if not found,
-    and copies it to ops_test.tmp_path / "charms" to avoid snap confinement issues.
+    Otherwise, looks for a pre-built charm file in the workspace, builds if not found.
+    Copies workspace charm to ops_test.tmp_path / "charms" to avoid snap confinement issues.
 
     Returns:
         Path object to the charm file, or "ceph-csi" string for charmhub deployment.
@@ -89,27 +89,26 @@ async def ceph_csi_charm(
         yield "ceph-csi"
         return
 
-    # Look for existing charm in workspace
+    # Look for existing charm in workspace (e.g., downloaded by workflow)
     charm_file = next(Path(".").glob("ceph-csi*.charm"), None)
 
-    if not charm_file:
+    if charm_file:
+        # Found in workspace - need to copy to pytest temp space for snap confinement
+        charm_file = charm_file.resolve()
+        charm_dir = ops_test.tmp_path / "charms"
+        charm_dir.mkdir(exist_ok=True, parents=True)
+        charm_dest = charm_dir / charm_file.name
+
+        logger.info(f"Copying charm from {charm_file} to {charm_dest}")
+        shutil.copy2(charm_file, charm_dest)
+        yield charm_dest
+    else:
+        # Not found - build it (ops_test.build_charm already puts it in tmp_path/charms)
         logger.info("Building ceph-csi charm.")
         charm_file = await ops_test.build_charm(".")
-
-    charm_file = charm_file.resolve() if charm_file else None
-
-    if not charm_file:
-        pytest.fail("Failed to build or locate ceph-csi charm")
-
-    # Copy charm to pytest temp space to avoid snap confinement issues
-    charm_dir = ops_test.tmp_path / "charms"
-    charm_dir.mkdir(exist_ok=True, parents=True)
-    charm_dest = charm_dir / charm_file.name
-
-    logger.info(f"Copying charm from {charm_file} to {charm_dest}")
-    shutil.copy2(charm_file, charm_dest)
-
-    yield charm_dest
+        if not charm_file:
+            pytest.fail("Failed to build ceph-csi charm")
+        yield charm_file
 
 
 @pytest.fixture(scope="module")
