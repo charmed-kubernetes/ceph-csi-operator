@@ -8,6 +8,7 @@ import logging
 from functools import cached_property
 from typing import Any, Dict, List, Optional, Set, cast
 
+import charms.ceph_csi.v0.ceph_csi as ceph_csi
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
 import ops
@@ -21,7 +22,6 @@ from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
 
-import ceph_csi
 import literals
 import utils
 from manifests_base import Manifests, SafeManifest
@@ -568,33 +568,35 @@ class CephCsiCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("Checking Relations")
 
         # Check for mutual exclusivity of ceph-csi and ceph-client relations
-        csi_relation = self.model.get_relation(literals.CEPH_CSI_RELATION)
-        client_relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
-
-        if csi_relation and client_relation:
-            msg = "Both ceph-csi and ceph-client relations are active. Only one is allowed."
+        try:
+            client_relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
+        except ops.model.TooManyRelatedAppsError:
+            msg = "Multiple ceph-client relations"
             status.add(ops.BlockedStatus(msg))
             raise status.ReconcilerError(msg)
 
-        csi_data = self.ceph_csi.get_relation_data()
-        if csi_data:
+        csi_relation = self.model.get_relation(literals.CEPH_CSI_RELATION)
+
+        if csi_relation and client_relation:
+            msg = "Both ceph-csi and ceph-client relations are active. Only one is allowed."
+            logger.warning(msg)
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+        elif not csi_relation and not client_relation:
+            msg = "Missing relation: ceph-client or ceph-csi"
+            logger.warning(msg)
+            status.add(ops.BlockedStatus(msg))
+            raise status.ReconcilerError(msg)
+
+        if csi_data := self.ceph_csi.get_relation_data():
             expected_csi_keys = ("fsid", "mon_hosts", "user_id", "user_key")
             missing_data = [key for key in expected_csi_keys if not csi_data.get(key)]
             if missing_data:
-                logger.warning("ceph-csi relation is missing data: %s", missing_data)
-                status.add(ops.WaitingStatus("ceph-csi relation is missing data."))
-                raise status.ReconcilerError("ceph-csi relation is missing data.")
+                msg = "ceph-csi relation is missing data"
+                logger.warning("%s: %s", msg, missing_data)
+                status.add(ops.WaitingStatus(msg))
+                raise status.ReconcilerError(msg)
             return
-
-        try:
-            relation = self.model.get_relation(literals.CEPH_CLIENT_RELATION)
-        except ops.model.TooManyRelatedAppsError:
-            status.add(ops.BlockedStatus("Multiple ceph-client relations"))
-            raise status.ReconcilerError("Multiple ceph-client relations")
-
-        if not relation:
-            status.add(ops.BlockedStatus("Missing relation: ceph-client"))
-            raise status.ReconcilerError("Missing relation: ceph-client")
 
         relation_data = self.ceph_client.get_relation_data()
         expected_client_keys = ("auth", "key", "mon_hosts")

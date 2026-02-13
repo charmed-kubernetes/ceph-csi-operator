@@ -19,7 +19,7 @@ from pytest_operator.plugin import OpsTest
 logger = logging.getLogger(__name__)
 
 
-MICROCEPH_CHANNEL = "latest/edge/csi"
+MICROCEPH_CHANNEL = "latest/edge"
 
 
 def pytest_addoption(parser):

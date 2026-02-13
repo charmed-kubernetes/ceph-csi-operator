@@ -4,13 +4,15 @@
 
 import json
 import logging
-import shlex
 from os import environ
 from pathlib import Path
+from typing import AsyncGenerator
 from uuid import uuid4
 
+import juju.constraints
 import pytest
 import pytest_asyncio
+from juju.model import Model
 from kubernetes import client, config, utils
 from pytest_operator.plugin import OpsTest
 
@@ -30,7 +32,9 @@ WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 RUNNING_POD_STATE = "Running"
 SUCCESS_POD_STATE = "Succeeded"
 
+MICROCEPH_MODEL_ALIAS = "microceph-model"
 MICROCEPH_APP = "microceph"
+MICROCEPH_CONSTRAINTS = "cores=2 mem=4G root-disk=4G"
 CEPH_CSI_APP = "ceph-csi"
 K8S_APP = "k8s"
 LOOP_OSD_SPEC = "1G,3"
@@ -94,54 +98,67 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
 
 
 @pytest_asyncio.fixture(scope="module")
-async def microceph_model(ops_test: OpsTest, microceph_source: dict):
+async def microceph_model(
+    ops_test: OpsTest, microceph_source: dict
+) -> AsyncGenerator[Model, None]:
     """Deploy microceph in a second (machine) model and return the model name."""
-    model_alias = "microceph-model"
-    microceph_model = await ops_test.track_model(model_alias)
-    model_name = microceph_model.info.name
+    await ops_test.track_model(MICROCEPH_MODEL_ALIAS)
 
-    if "charm" in microceph_source:
-        logger.info("Deploying microceph from local charm in model %s", model_name)
-        await microceph_model.deploy(str(microceph_source["charm"]), MICROCEPH_APP)
-    else:
-        logger.info(
-            "Deploying microceph from charmhub (%s) in model %s",
-            microceph_source["channel"],
-            model_name,
-        )
-        # Use CLI to deploy because juju client doesn't handle channels like "latest/edge/csi"
-        await ops_test.juju(
-            "deploy", MICROCEPH_APP, "-m", model_name, "--channel", microceph_source["channel"]
-        )
-    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
+    with ops_test.model_context(MICROCEPH_MODEL_ALIAS) as model:
+        if charm := microceph_source.get("charm"):
+            logger.info("Deploying microceph from local charm in model %s", model.name)
+            await model.deploy(
+                str(charm),
+                MICROCEPH_APP,
+                constraints=juju.constraints.parse(MICROCEPH_CONSTRAINTS),
+            )
+        elif channel := microceph_source.get("channel"):
+            logger.info(
+                "Deploying microceph from charmhub (%s) in model %s",
+                channel,
+                model.name,
+            )
+            # Use CLI to deploy because juju client doesn't handle channels like "latest/edge/csi"
+            await ops_test.juju(
+                "deploy",
+                MICROCEPH_APP,
+                "--channel",
+                channel,
+                "--constraints",
+                MICROCEPH_CONSTRAINTS,
+                check=True,
+            )
+        else:
+            pytest.fail("No microceph source specified")
+    await model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
 
     # Add loop OSDs
-    microceph_units = microceph_model.applications[MICROCEPH_APP].units
+    microceph_units = model.applications[MICROCEPH_APP].units
     for unit in microceph_units:
         action = await unit.run_action("add-osd", **{"loop-spec": LOOP_OSD_SPEC})
         action = await action.wait()
         assert action.status == "completed", f"add-osd failed on {unit.name}: {action.results}"
 
-    await microceph_model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
+    await model.wait_for_idle(apps=[MICROCEPH_APP], status="active", timeout=20 * 60)
 
-    yield model_name
+    yield model
 
     if not ops_test.keep_model:
-        await ops_test.forget_model(model_alias)
+        await ops_test.forget_model(MICROCEPH_MODEL_ALIAS)
 
 
 @pytest_asyncio.fixture(scope="module")
-async def ceph_csi_offer(ops_test: OpsTest, microceph_model: str):
+async def ceph_csi_offer(microceph_model: Model):
     """Create a juju offer for the microceph ceph-csi endpoint."""
-    offer_url = f"admin/{microceph_model}.{MICROCEPH_APP}"
-    logger.info("Creating offer for %s:ceph-csi", MICROCEPH_APP)
+    endpoint = f"{MICROCEPH_APP}:ceph-csi"
+    offer_url = f"admin/{microceph_model.name}.{MICROCEPH_APP}"
+    logger.info("Creating offer for %s", offer_url)
 
-    rc, stdout, stderr = await ops_test.run(
-        *shlex.split(f"juju offer -m {microceph_model} {MICROCEPH_APP}:ceph-csi")
-    )
-    assert rc == 0, f"juju offer failed: {(stderr or stdout).strip()}"
-
-    yield offer_url
+    try:
+        await microceph_model.create_offer(endpoint)
+        yield offer_url
+    finally:
+        await microceph_model.remove_offer(endpoint, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +167,10 @@ async def ceph_csi_offer(ops_test: OpsTest, microceph_model: str):
 
 
 @pytest.mark.abort_on_fail
-async def test_deploy_microceph(microceph_model: str):
+async def test_deploy_microceph(microceph_model: Model):
     """Deploy microceph in a separate machine model and add storage."""
     assert microceph_model, "microceph model should be available"
-    logger.info("Microceph deployed in model: %s", microceph_model)
+    logger.info("Microceph deployed in model: %s", microceph_model.name)
 
 
 @pytest.mark.abort_on_fail
@@ -182,36 +199,28 @@ async def test_build_and_deploy(
     bundle, *overlays = await ops_test.async_render_bundles(*overlays, **bundle_vars)
 
     logger.info("Deploying ceph-csi integration test bundle.")
-    model = ops_test.model_full_name
-    cmd = f"juju deploy -m {model} {bundle} " + " ".join(f"--overlay={f}" for f in overlays)
-    rc, stdout, stderr = await ops_test.run(*shlex.split(cmd))
-    assert rc == 0, f"Bundle deploy failed: {(stderr or stdout).strip()}"
-    logger.info(stdout)
+    with ops_test.model_context("main") as model:
+        await ops_test.juju(
+            "deploy", str(bundle), *(f"--overlay={f}" for f in overlays), check=True
+        )
 
-    # Consume the microceph offer
-    logger.info("Consuming offer %s", ceph_csi_offer)
-    rc, stdout, stderr = await ops_test.run(
-        *shlex.split(f"juju consume -m {model} {ceph_csi_offer} {MICROCEPH_APP}")
-    )
-    assert rc == 0, f"juju consume failed: {(stderr or stdout).strip()}"
+        # Integrate ceph-csi with the consumed offer
+        logger.info("Integrating ceph-csi:ceph with microceph offer")
+        await model.integrate(f"{CEPH_CSI_APP}:ceph", ceph_csi_offer)
 
-    # Integrate ceph-csi with the consumed offer
-    logger.info("Integrating ceph-csi:ceph with microceph offer")
-    await ops_test.model.integrate(f"{CEPH_CSI_APP}:ceph", MICROCEPH_APP)
+        # Wait for ceph-csi to report namespace issue first
+        def ceph_csi_needs_namespace():
+            ceph_csi = model.applications.get(CEPH_CSI_APP)
+            expected = f"Missing namespace '{namespace}'"
+            if not ceph_csi or not ceph_csi.units:
+                return False
+            return any(expected in u.workload_status_message for u in ceph_csi.units)
 
-    # Wait for ceph-csi to report namespace issue first
-    def ceph_csi_needs_namespace():
-        ceph_csi = ops_test.model.applications.get(CEPH_CSI_APP)
-        expected = f"Missing namespace '{namespace}'"
-        if not ceph_csi or not ceph_csi.units:
-            return False
-        return any(expected in u.workload_status_message for u in ceph_csi.units)
-
-    await ops_test.model.block_until(ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5)
+        await model.block_until(ceph_csi_needs_namespace, timeout=60 * 60, wait_period=5)
 
 
 @pytest.mark.abort_on_fail
-async def test_active_status(kube_config: Path, namespace: str, ops_test: OpsTest):
+async def test_active_status(kube_config: Path, ops_test: OpsTest):
     """Test that all apps reach active state after namespace creation."""
     config.load_kube_config(str(kube_config))
     ceph_csi_app = ops_test.model.applications[CEPH_CSI_APP]
@@ -250,10 +259,9 @@ async def test_cephfs_storage_class(kube_config: Path, ops_test: OpsTest):
     )
 
 
-async def test_ceph_resources(ops_test: OpsTest, microceph_model: str):
+async def test_ceph_resources(microceph_model: Model):
     """Verify pools, filesystem, and auth on the microceph side."""
-    microceph = await ops_test.get_model(microceph_model)
-    microceph_units = microceph.applications[MICROCEPH_APP].units
+    microceph_units = microceph_model.applications[MICROCEPH_APP].units
     leader = microceph_units[0]
 
     # Verify RBD pool (cross-model uses rbd.remote-<uuid> naming)

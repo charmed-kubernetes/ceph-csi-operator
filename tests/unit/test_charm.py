@@ -250,7 +250,7 @@ def test_check_ceph_client(harness):
         harness.charm.on.install.emit()
 
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Missing relation: ceph-client"
+    assert harness.charm.unit.status.message == "Missing relation: ceph-client or ceph-csi"
 
     with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
         rel_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")

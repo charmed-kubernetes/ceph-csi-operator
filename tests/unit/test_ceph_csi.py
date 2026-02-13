@@ -5,10 +5,9 @@
 import json
 
 import pytest
+from charms.ceph_csi.v0.ceph_csi import CephCSIRequires
 from ops.charm import CharmBase
 from ops.testing import Harness
-
-from ceph_csi import CephCSIRequires
 
 
 class MockCharm(CharmBase):
