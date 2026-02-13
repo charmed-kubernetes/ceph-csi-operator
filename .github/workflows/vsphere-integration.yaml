@@ -53,12 +53,17 @@ jobs:
         uses: charmed-kubernetes/actions-operator@main
         with:
           provider: vsphere
-          credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
+          juju-channel: "3/stable"
           charmcraft-channel: ${{ steps.charmcraft.outputs.channel }}
+          credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"
-          bootstrap-options: "${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }} --model-default datastore=vsanDatastore --model-default primary-network=VLAN_2763 --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions"
-          juju-channel: "3/stable"
+          bootstrap-options: >-
+            ${{ vars.VSPHERE_BOOTSTRAP_NOBLE }}
+            ${{ vars.VSPHERE_BOOTSTRAP_DATASTORE }}
+            ${{ vars.VSPHERE_BOOTSTRAP_VLAN_2763 }}
+            ${{ vars.VSPHERE_BOOTSTRAP_HARDWARE_VERSION }}
+            --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions
 
       - if: ${{ needs.charm-source.outputs.channel }}
         name: Test from ceph-csi channel=${{ needs.charm-source.outputs.channel }}
