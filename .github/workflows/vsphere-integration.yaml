@@ -12,7 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.charm.outputs.channel }}
+      charmcraft-channel: ${{ steps.charmcraft.outputs.channel }}
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Read charmcraft version file
+        id: charmcraft
+        run: echo "channel=$(cat .charmcraft-channel)" >> $GITHUB_OUTPUT
       - name: Pull-Request charm channel
         id: charm
         run: |
@@ -31,20 +37,36 @@ jobs:
             echo "Using empty channel for pull request"
           fi
           echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+      - if: ${{ !steps.charm.outputs.channel }}
+        name: Build ceph-csi charm
+        uses: canonical/craft-actions/charmcraft/pack@main
+        with:
+          channel: ${{ steps.charmcraft.outputs.channel }}
+      - if: ${{ !steps.charm.outputs.channel }}
+        name: Upload charm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ceph-csi-charm
+          path: ceph-csi_*.charm
   integration-test:
     name: VSphere Integration Test
     needs: charm-source
     runs-on: self-hosted
     timeout-minutes: 120
+    strategy:
+      matrix:
+        style: [test_microceph, test_charmed_ceph]
     env:
       # Set default values
-      EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest"
+      EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest -k ${{ matrix.style }}"
     steps:
       - name: Check out code
         uses: actions/checkout@v4
-      - name: Read charmcraft version file
-        id: charmcraft
-        run: echo "channel=$(cat .charmcraft-channel)" >> $GITHUB_OUTPUT
+      - if: ${{ !needs.charm-source.outputs.channel }}
+        name: Download charm artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ceph-csi-charm
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -54,7 +76,7 @@ jobs:
         with:
           provider: vsphere
           juju-channel: "3/stable"
-          charmcraft-channel: ${{ steps.charmcraft.outputs.channel }}
+          charmcraft-channel: ${{ needs.charm-source.outputs.charmcraft-channel }}
           credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"

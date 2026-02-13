@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 LATEST_RELEASE = ""  # ops.manifest will load the latest release when unspecified
 TEST_PATH = Path(__file__).parent
 TEMPLATE_DIR = TEST_PATH / "templates"
-TEST_OVERLAY = TEST_PATH / "overlay.yaml"
+TEST_OVERLAY = TEST_PATH / "charmed-ceph.yaml"
 
 DEFAULT_ANNOTATION = "storageclass.kubernetes.io/is-default-class"
 STORAGE_TEMPLATE = "persistent_volume.yaml.j2"
@@ -53,19 +53,12 @@ def ready_apps(ops_test: OpsTest):
 
 
 @pytest.mark.abort_on_fail
-async def test_build_and_deploy(ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None):
+async def test_build_and_deploy(
+    ops_test: OpsTest, namespace: str, ceph_csi_channel: str | None, ceph_csi_charm: Path | str
+):
     """Build ceph-csi charm and deploy testing model."""
-    if ceph_csi_channel:
-        logger.info(f"Using ceph-csi channel: {ceph_csi_channel}")
-        charm = "ceph-csi"
-        channel = ceph_csi_channel
-    else:
-        channel = None
-        charm = next(Path(".").glob("ceph-csi*.charm"), None)
-        if not charm:
-            logger.info("Building ceph-csi charm.")
-            charm = await ops_test.build_charm(".")
-        charm = charm.resolve() if charm else None
+    charm = ceph_csi_charm
+    channel = ceph_csi_channel
 
     bundle_vars = {
         "charm": charm,
@@ -125,7 +118,7 @@ async def test_deployment_replicas(kube_config: Path, namespace: str, ops_test):
     apps_api = client.AppsV1Api()
     (rbdplugin,) = apps_api.list_namespaced_deployment(namespace, **RBD_LS).items
     k8s_workers = ops_test.model.applications["k8s-worker"]
-    assert rbdplugin.status.replicas == 1  # from the test overlay.yaml
+    assert rbdplugin.status.replicas == 1  # from the test charmed-ceph.yaml
     # Due to anti-affinity rules on the control-plane, the ready replicas
     # are limited to the number of worker nodes, of which there are 1
     assert rbdplugin.status.ready_replicas == len(k8s_workers.units)

@@ -66,6 +66,7 @@ def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_file):
         "provisioner_replicas": 3,
         "enable_host_network": "false",
         "fs_list": [],
+        "rbd_pool": None,
     }
 
     assert harness.charm.ceph_context == expected_context
@@ -249,7 +250,7 @@ def test_check_ceph_client(harness):
         harness.charm.on.install.emit()
 
     assert harness.charm.unit.status.name == "blocked"
-    assert harness.charm.unit.status.message == "Missing relation: ceph-client"
+    assert harness.charm.unit.status.message == "Missing relation: ceph-client or ceph-csi"
 
     with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
         rel_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
@@ -771,3 +772,242 @@ def test_update_status_ready_no_default(update_status_charm):
     assert update_status_charm.unit.status.name == "active"
     assert update_status_charm.app._backend._workload_version == "short-version"
     assert update_status_charm.app.status.message == "long-version"
+
+
+def test_check_ceph_client_mutual_exclusivity(harness):
+    """Test that having both ceph-csi and ceph-client relations blocks the charm."""
+    harness.begin()
+
+    # Add both relations
+    with reconcile_this(harness, lambda _: None):
+        harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
+        harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+
+    with reconcile_this(harness, lambda _: harness.charm.check_ceph_client()):
+        harness.charm.on.install.emit()
+
+    assert harness.charm.unit.status.name == "blocked"
+    assert (
+        harness.charm.unit.status.message
+        == "Both ceph-csi and ceph-client relations are active. Only one is allowed."
+    )
+
+
+def test_ceph_user_returns_user_id_from_ceph_csi(harness):
+    """Test that ceph_user returns user_id from ceph-csi relation when available."""
+    harness.begin()
+
+    # Mock the ceph_csi.get_relation_data to return user_id
+    with mock.patch.object(
+        harness.charm.ceph_csi, "get_relation_data", return_value={"user_id": "microceph-user"}
+    ):
+        assert harness.charm.ceph_user == "microceph-user"
+
+
+def test_ceph_user_returns_app_name_without_ceph_csi(harness):
+    """Test that ceph_user returns app.name when no ceph-csi relation data."""
+    harness.begin()
+
+    # No ceph-csi relation data
+    with mock.patch.object(harness.charm.ceph_csi, "get_relation_data", return_value=None):
+        assert harness.charm.ceph_user == "ceph-csi"
+
+    # ceph-csi relation data without user_id
+    with mock.patch.object(harness.charm.ceph_csi, "get_relation_data", return_value={}):
+        assert harness.charm.ceph_user == "ceph-csi"
+
+
+def test_cephfs_from_relation(harness):
+    """Test that _cephfs_from_relation constructs valid CephFilesystem objects."""
+    harness.begin()
+
+    # Test with valid cephfs_fs_name
+    csi_data = {"cephfs_fs_name": "myfs"}
+    result = harness.charm._cephfs_from_relation(csi_data)
+
+    assert len(result) == 1
+    assert result[0].name == "myfs"
+    assert result[0].metadata_pool == "cephfs.myfs.meta"
+    assert result[0].data_pools == ["cephfs.myfs.data"]
+    assert result[0].metadata_pool_id == 0
+    assert result[0].data_pool_ids == [0]
+
+    # Test without cephfs_fs_name
+    csi_data_empty = {}
+    result_empty = harness.charm._cephfs_from_relation(csi_data_empty)
+    assert result_empty == []
+
+    # Test with None cephfs_fs_name
+    csi_data_none = {"cephfs_fs_name": None}
+    result_none = harness.charm._cephfs_from_relation(csi_data_none)
+    assert result_none == []
+
+
+@mock.patch("utils.ls_ceph_fs")
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_ceph_context_uses_relation_fs_when_cli_empty(ceph_data, mock_ls_ceph_fs, harness):
+    """Test that ceph_context falls back to relation data when CLI returns empty fs list."""
+    harness.begin()
+
+    # Mock ceph_data for basic auth
+    ceph_data.return_value = {
+        "auth": "cephx",
+        "key": "secret_key",
+        "mon_hosts": ["10.0.0.1"],
+    }
+
+    # Mock CLI to return empty fs list
+    mock_ls_ceph_fs.return_value = []
+
+    # Mock ceph_csi relation data with cephfs_fs_name
+    with mock.patch.object(
+        harness.charm.ceph_csi,
+        "get_relation_data",
+        return_value={
+            "fsid": "csi-fsid",
+            "user_id": "csi-user",
+            "user_key": "csi-key",
+            "cephfs_fs_name": "cephfs",
+        },
+    ):
+        context = harness.charm.ceph_context
+
+    # Verify the fs_list was populated from relation data
+    assert len(context["fs_list"]) == 1
+    assert context["fs_list"][0].name == "cephfs"
+    assert context["fs_list"][0].data_pools == ["cephfs.cephfs.data"]
+
+
+@mock.patch("utils.ls_ceph_fs")
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_ceph_context_uses_rbd_pool_from_ceph_csi_relation(ceph_data, mock_ls_ceph_fs, harness):
+    """Test that ceph_context includes rbd_pool from ceph-csi relation data."""
+    harness.begin()
+
+    # Mock ceph_data for basic auth
+    ceph_data.return_value = {
+        "auth": "cephx",
+        "key": "secret_key",
+        "mon_hosts": ["10.0.0.1"],
+    }
+
+    # Mock CLI to return empty fs list
+    mock_ls_ceph_fs.return_value = []
+
+    # Mock ceph_csi relation data with rbd_pool
+    with mock.patch.object(
+        harness.charm.ceph_csi,
+        "get_relation_data",
+        return_value={
+            "fsid": "csi-fsid",
+            "user_id": "csi-user",
+            "user_key": "csi-key",
+            "rbd_pool": "rbd.my-custom-pool",
+        },
+    ):
+        context = harness.charm.ceph_context
+
+    # Verify rbd_pool is included in the context
+    assert context["rbd_pool"] == "rbd.my-custom-pool"
+    assert context["fsid"] == "csi-fsid"
+    assert context["user"] == "csi-user"
+    assert context["kubernetes_key"] == "csi-key"
+
+
+def test_request_ceph_csi_workloads_requests_rbd_workload(harness):
+    """Test _request_ceph_csi_workloads requests rbd workload when enabled."""
+    harness.begin()
+    harness.set_leader(True)
+    harness.update_config({"ceph-rbd-enable": True, "cephfs-enable": False})
+
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+
+    with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
+        harness.charm._request_ceph_csi_workloads()
+
+        mock_request.assert_called_once()
+        called_workloads = mock_request.call_args[0][0]
+        assert "rbd" in called_workloads
+        assert "cephfs" not in called_workloads
+
+
+def test_request_ceph_csi_workloads_requests_cephfs_workload(harness):
+    """Test _request_ceph_csi_workloads requests cephfs workload when enabled."""
+    harness.begin()
+    harness.set_leader(True)
+    harness.update_config({"ceph-rbd-enable": False, "cephfs-enable": True})
+
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+
+    with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
+        harness.charm._request_ceph_csi_workloads()
+
+        mock_request.assert_called_once()
+        called_workloads = mock_request.call_args[0][0]
+        assert "cephfs" in called_workloads
+        assert "rbd" not in called_workloads
+
+
+def test_request_ceph_csi_workloads_requests_both_workloads(harness):
+    """Test _request_ceph_csi_workloads requests both workloads when both enabled."""
+    harness.begin()
+    harness.set_leader(True)
+    harness.update_config({"ceph-rbd-enable": True, "cephfs-enable": True})
+
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+
+    with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
+        harness.charm._request_ceph_csi_workloads()
+
+        mock_request.assert_called_once()
+        called_workloads = mock_request.call_args[0][0]
+        assert "rbd" in called_workloads
+        assert "cephfs" in called_workloads
+
+
+def test_request_ceph_csi_workloads_with_no_providers_enabled(harness):
+    """Test _request_ceph_csi_workloads when no providers are enabled."""
+    harness.begin()
+    harness.set_leader(True)
+    harness.update_config({"ceph-rbd-enable": False, "cephfs-enable": False})
+
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+
+    with mock.patch.object(harness.charm.ceph_csi, "request_workloads") as mock_request:
+        harness.charm._request_ceph_csi_workloads()
+
+        # When no providers are enabled, request_workloads should not be called
+        # or should be called with empty list
+        # Looking at the code, it checks if workloads list is truthy before calling
+        mock_request.assert_not_called()
+
+
+@mock.patch("charm.CephCsiCharm.ceph_data", new_callable=mock.PropertyMock)
+def test_check_ceph_client_with_incomplete_ceph_csi_data(ceph_data, harness):
+    """Test check_ceph_client raises error when ceph-csi relation data is incomplete."""
+    ceph_data.return_value = None
+    harness.begin()
+    harness.disable_hooks()
+
+    # Add ceph-csi relation
+    relation_id = harness.add_relation(literals.CEPH_CSI_RELATION, "microceph")
+    harness.add_relation_unit(relation_id, "microceph/0")
+
+    # Mock incomplete ceph-csi data (missing user_key)
+    with mock.patch.object(
+        harness.charm.ceph_csi,
+        "get_relation_data",
+        return_value={
+            "fsid": "test-fsid",
+            "mon_hosts": ["10.0.0.1"],
+            "user_id": "ceph-csi",
+            "user_key": None,  # Missing this required field
+        },
+    ):
+        # This should raise a ReconcilerError
+        with pytest.raises(status.ReconcilerError, match="ceph-csi relation is missing data"):
+            harness.charm.check_ceph_client()

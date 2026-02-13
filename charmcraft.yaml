@@ -432,10 +432,19 @@ actions:
     - name
 
 requires:
+  ceph:
+    interface: ceph-csi
+    limit: 1
   ceph-client:
     interface: ceph-client
+    # limit: 1 -- historically this charm supported multiple ceph-client relations,
+    # but is no longer supported. The charm will block if multiple ceph-client relations
+    # are present.
   kubernetes:
     interface: juju-info
+    scope: container
+  kubernetes-info:
+    interface: kubernetes-info
     scope: container
   kubernetes-info:
     interface: kubernetes-info
