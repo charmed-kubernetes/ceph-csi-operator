@@ -25,7 +25,7 @@ def render_j2_template(template_dir: str, template: str, **context: Any) -> dict
     :param context: variables and their values used in the template.
     :return: dict parsed from rendered jinja2 template
     """
-    env = Environment(loader=FileSystemLoader(template_dir))
+    env = Environment(loader=FileSystemLoader(template_dir)) # nosec B701
     raw_data = env.get_template(template).render(**context)
     return yaml.safe_load(raw_data)
 
