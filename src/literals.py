@@ -23,3 +23,7 @@ DEFAULT_SC_ANNOTATION = {DEFAULT_SC_ANNOTATION_NAME: "true"}
 
 CONFIG_CEPH_RBD_ENABLE = "ceph-rbd-enable"
 CONFIG_CEPHFS_ENABLE = "cephfs-enable"
+
+CONFIG_RECLAIM_POLICY = "default-reclaim-policy"
+CONFIG_RECLAIM_POLICY_DEFAULT = "Delete"
+VALID_RECLAIM_POLICIES = ["Delete", "Retain"]

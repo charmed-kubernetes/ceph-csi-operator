@@ -371,6 +371,24 @@ config:
         The current release deployed is available by viewing
           juju status ceph-csi
 
+    default-reclaim-policy:
+      default: "Delete"
+      description: |
+        The reclaim policy for all storage classes created by this charm.
+
+        Valid values are "Delete" and "Retain".
+
+        "Delete" means that when a PersistentVolumeClaim is deleted, the underlying
+        Ceph volume is also automatically deleted.
+
+        "Retain" means that the Ceph volume is kept even after the
+        PersistentVolumeClaim is deleted. This allows for manual recovery of
+        data from the volume after deletion of the claim.
+
+        NOTE: Kubernetes does not allow changing the reclaimPolicy of an existing
+        StorageClass. This option only takes effect before the StorageClass is created.
+      type: string
+
 actions:
   list-versions:
     description: List versions supported by this charm

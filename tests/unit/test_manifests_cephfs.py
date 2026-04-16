@@ -159,6 +159,17 @@ def test_ceph_storage_class_modelled(caplog):
     assert csc() == [expected]
     assert f"Modelling storage class sc='{TEST_CEPH_FS_ALT.name}'" in caplog.text
 
+    # check default reclaim policy is Delete
+    assert csc()[0].reclaimPolicy == "Delete"
+
+    manifest.config["default-reclaim-policy"] = "Retain"
+    expected.reclaimPolicy = "Retain"
+    assert csc() == [expected]
+
+    manifest.config["default-reclaim-policy"] = "Delete"
+    expected.reclaimPolicy = "Delete"
+    assert csc() == [expected]
+
 
 def test_ceph_storage_class_purging(caplog):
     caplog.set_level(logging.INFO)
@@ -218,6 +229,19 @@ def test_manifest_evaluation(caplog):
     )
 
     charm.config[sc_name_formatter_key] = "cephfs-{name}"
+    assert manifests.evaluate() is None
+
+    # check invalid reclaim policy is caught
+    charm.config["default-reclaim-policy"] = "Invalid"
+    assert (
+        manifests.evaluate()
+        == "Invalid default-reclaim-policy 'Invalid', valid options are ['Delete', 'Retain']"
+    )
+
+    charm.config["default-reclaim-policy"] = "Retain"
+    assert manifests.evaluate() is None
+
+    charm.config["default-reclaim-policy"] = "Delete"
     assert manifests.evaluate() is None
 
     charm.config["cephfs-tolerations"] = "key=value,Foo"
