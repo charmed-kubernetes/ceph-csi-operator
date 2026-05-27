@@ -97,9 +97,9 @@ class UpdateStatusHandler(ops.Object):
         elif unready := self.charm.collector.unready:
             status.add(ops.WaitingStatus(", ".join(unready)))
             raise status.ReconcilerError("Waiting for deployment")
-        elif self.charm.stored.namespace != self.charm._configured_ns:
+        elif str(self.charm.stored.namespace) != self.charm._configured_ns:
             status.add(ops.BlockedStatus("Namespace cannot be changed after deployment"))
-        elif self.charm.stored.drivername != self.charm._configured_drivername:
+        elif str(self.charm.stored.drivername) != self.charm._configured_drivername:
             status.add(
                 ops.BlockedStatus("csidriver-name-formatter cannot be changed after deployment")
             )
