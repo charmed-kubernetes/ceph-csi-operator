@@ -96,12 +96,16 @@ class CephStorageClass(StorageClassFactory):
 
         self.update_params(parameters)
 
+        reclaim_policy = self.manifests.config.get(
+            literals.CONFIG_RECLAIM_POLICY, literals.CONFIG_RECLAIM_POLICY_DEFAULT
+        )
+
         return StorageClass.from_dict(
             dict(
                 metadata=metadata,
                 provisioner=driver_name,
                 allowVolumeExpansion=True,
-                reclaimPolicy="Delete",
+                reclaimPolicy=reclaim_policy,
                 parameters=parameters,
             )
         )
@@ -256,6 +260,15 @@ class CephFSManifests(SafeManifest):
         if not self.config.get("enabled"):
             log.info("Skipping CephFS evaluation since it's disabled")
             return None
+
+        reclaim_policy = self.config.get(
+            literals.CONFIG_RECLAIM_POLICY, literals.CONFIG_RECLAIM_POLICY_DEFAULT
+        )
+        if reclaim_policy not in literals.VALID_RECLAIM_POLICIES:
+            return (
+                f"Invalid default-reclaim-policy '{reclaim_policy}', "
+                f"valid options are {literals.VALID_RECLAIM_POLICIES}"
+            )
 
         props = CephFSSecret.REQUIRED_CONFIG.keys() | RbacAdjustments.REQUIRED_CONFIG
         for prop in sorted(props):

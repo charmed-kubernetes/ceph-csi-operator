@@ -116,6 +116,17 @@ def test_ceph_storage_class_modelled(caplog, fs_type):
     assert csc() == expected
     assert f"Modelling storage class {sc_name}" in caplog.text
 
+    # check default reclaim policy is Delete
+    assert csc().reclaimPolicy == "Delete"
+
+    manifest.config["default-reclaim-policy"] = "Retain"
+    expected.reclaimPolicy = "Retain"
+    assert csc() == expected
+
+    manifest.config["default-reclaim-policy"] = "Delete"
+    expected.reclaimPolicy = "Delete"
+    assert csc() == expected
+
 
 @pytest.mark.parametrize("fs_type", ["xfs", "ext4"])
 def test_ceph_storage_class_purging(caplog, fs_type):
@@ -164,6 +175,18 @@ def test_manifest_evaluation(caplog):
     assert manifests.evaluate() == err_formatter.format("ceph-ext4-storage-class-name-formatter")
 
     charm.config["ceph-ext4-storage-class-name-formatter"] = "ceph-ext4"
+    assert manifests.evaluate() is None
+
+    charm.config["default-reclaim-policy"] = "Invalid"
+    assert (
+        manifests.evaluate()
+        == "Invalid default-reclaim-policy 'Invalid', valid options are ['Delete', 'Retain']"
+    )
+
+    charm.config["default-reclaim-policy"] = "Retain"
+    assert manifests.evaluate() is None
+
+    charm.config["default-reclaim-policy"] = "Delete"
     assert manifests.evaluate() is None
 
     charm.config["ceph-rbd-tolerations"] = "key=value,Foo"
