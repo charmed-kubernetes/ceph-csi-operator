@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 GH_REPO = "https://github.com/{repo}"
 GH_TAGS = "https://api.github.com/repos/{repo}/tags"
 GH_RAW = "https://raw.githubusercontent.com/{repo}/{rel}/{path}/{manifest}"
-ROCKS_CC = "upload.rocks.canonical.com:5000/cdk"
+ROCKS_CC = "ghcr.io/canonical/cdk"
 
 SOURCES = dict(
     rbd=dict(
