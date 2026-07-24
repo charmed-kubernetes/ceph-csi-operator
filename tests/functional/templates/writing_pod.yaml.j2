@@ -12,7 +12,7 @@ spec:
   containers:
     - name: write-test-{{ storage_class }}
       #  rocks registry is used because we were hitting rate limits in dockerhub
-      image: rocks.canonical.com:443/cdk/ubuntu:jammy
+      image: ghcr.io/canonical/cdk/ubuntu:jammy
       command: ["/bin/bash", "-c", "echo '{{ data }}' > /data/juju"]
       volumeMounts:
       - name: shared-data
