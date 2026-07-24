@@ -5,8 +5,8 @@
 #  pylint: disable=W0621
 
 import logging
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio

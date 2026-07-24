@@ -4,7 +4,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
@@ -38,8 +38,8 @@ class CephFilesystem:
     name: str
     metadata_pool: str
     metadata_pool_id: int
-    data_pool_ids: List[int]
-    data_pools: List[str]
+    data_pool_ids: list[int]
+    data_pools: list[str]
 
 
 @dataclass
@@ -74,7 +74,7 @@ class CephStorageClass(StorageClassFactory):
         driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
         ns = self.manifests.config["namespace"]
-        metadata: Dict[str, Any] = dict(name=param.storage_class_name)
+        metadata: dict[str, Any] = dict(name=param.storage_class_name)
         if param.is_default:
             metadata["annotations"] = literals.DEFAULT_SC_ANNOTATION
 
@@ -110,7 +110,7 @@ class CephStorageClass(StorageClassFactory):
             )
         )
 
-    def parameter_list(self) -> List[CephStorageClassParameters]:
+    def parameter_list(self) -> list[CephStorageClassParameters]:
         """Accumulate names and settings of the storage classes.
 
         This can be a difficult problem to resolve the actual names
@@ -125,7 +125,7 @@ class CephStorageClass(StorageClassFactory):
         will raise a ValueError exception indicated the value missing.
         """
         fsid = self.manifests.config.get("fsid")
-        fs_data: List[CephFilesystem] = self.manifests.config.get(self.FILESYSTEM_LISTING) or []
+        fs_data: list[CephFilesystem] = self.manifests.config.get(self.FILESYSTEM_LISTING) or []
 
         if not fsid:
             log.error("CephFS is missing a filesystem: 'fsid'")
@@ -137,7 +137,7 @@ class CephStorageClass(StorageClassFactory):
 
         self.evaluate()
 
-        sc_names: List[CephStorageClassParameters] = []
+        sc_names: list[CephStorageClassParameters] = []
         for fs in fs_data:
             for idx, data_pool in enumerate(fs.data_pools):
                 context = {
@@ -164,7 +164,7 @@ class CephStorageClass(StorageClassFactory):
             raise ValueError(f"{self.name_formatter_key} does not generate unique names")
         return sc_names
 
-    def __call__(self) -> List[AnyResource]:
+    def __call__(self) -> list[AnyResource]:
         """Craft the storage class objects."""
         driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
@@ -195,7 +195,7 @@ class FSProvAdjustments(ProvisionerAdjustments):
     PROVISIONER_NAME = "csi-cephfsplugin-provisioner"
     PLUGIN_NAME = "csi-cephfsplugin"
 
-    def tolerations(self) -> Tuple[List[CephToleration], bool]:
+    def tolerations(self) -> tuple[list[CephToleration], bool]:
         cfg = self.manifests.config.get("cephfs-tolerations") or ""
         if cfg == "$csi-cephfsplugin-legacy$":
             return [], True
@@ -237,9 +237,9 @@ class CephFSManifests(SafeManifest):
         self.charm = charm
 
     @property
-    def config(self) -> Dict:
+    def config(self) -> dict:
         """Returns current config available from charm config and joined relations."""
-        config: Dict = {}
+        config: dict = {}
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.kubernetes_context)
@@ -255,7 +255,7 @@ class CephFSManifests(SafeManifest):
         config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
-    def evaluate(self) -> Optional[str]:
+    def evaluate(self) -> str | None:
         """Determine if manifest_config can be applied to manifests."""
         if not self.config.get("enabled"):
             log.info("Skipping CephFS evaluation since it's disabled")

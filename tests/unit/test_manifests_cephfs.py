@@ -1,6 +1,6 @@
 import logging
-import unittest.mock as mock
 from pathlib import Path
+from unittest import mock
 
 import yaml
 from lightkube.models.apps_v1 import DaemonSet, Deployment

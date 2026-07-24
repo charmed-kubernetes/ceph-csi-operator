@@ -5,16 +5,21 @@
 """Collection of tests related to src/charm.py"""
 
 import contextlib
-import unittest.mock as mock
+from unittest import mock
 
 import charms.contextual_status as status
-import charms.operator_libs_linux.v0.apt as apt
 import ops
 import pytest
+from charms.operator_libs_linux.v0 import apt
 from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
+from ops.manifests import (
+    HashableResource,
+    ManifestClientError,
+    ManifestLabel,
+    ResourceAnalysis,
+)
 from ops.testing import Harness
 
 import literals
@@ -54,7 +59,7 @@ def test_ceph_context_getter(ceph_data, check_output, harness, ceph_conf_file):
         "key": key,
         "mon_hosts": monitors,
     }
-    check_output.side_effect = (fsid.encode("UTF-8"), "{}".encode("UTF-8"))
+    check_output.side_effect = (fsid.encode("UTF-8"), b"{}")
 
     # key and value format expected in context for Kubernetes templates.
     expected_context = {

@@ -1,8 +1,9 @@
 import logging
 import pickle
+from collections.abc import Generator
 from functools import cached_property
 from hashlib import md5
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple, cast
+from typing import Any, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
@@ -31,22 +32,22 @@ class SafeManifest(Manifests):
         raise ValueError("CSIDriverAdjustments not found")
 
     @property
-    def config(self) -> Dict[str, Any]:
+    def config(self) -> dict[str, Any]:
         return {}  # pragma: no cover
 
-    def storage_classes(self) -> Set[HashableResource]:
+    def storage_classes(self) -> set[HashableResource]:
         return {res for res in self.resources if res.kind == "StorageClass"}
 
-    def evaluate(self) -> Optional[str]: ...  # pragma: no cover
+    def evaluate(self) -> str | None: ...  # pragma: no cover
 
 
 class StorageSecret(Addition):
     """Create secret for the Provider."""
 
     NAME: str
-    REQUIRED_CONFIG: Dict[str, List[str]]
+    REQUIRED_CONFIG: dict[str, list[str]]
 
-    def __call__(self) -> Optional[AnyResource]:
+    def __call__(self) -> AnyResource | None:
         """Craft the secrets object for the deployment."""
         manifest = self.manifests.name
 
@@ -134,7 +135,7 @@ class StorageClassFactory(Addition):
         return f"{self._fs_type}-storage-class-parameters"
 
     @property
-    def storage_class_parameters(self) -> Dict[str, Optional[str]]:
+    def storage_class_parameters(self) -> dict[str, str | None]:
         """Storage class parameters."""
         params = {}
         cfg_name = self.storage_class_parameters_key
@@ -166,7 +167,7 @@ class StorageClassFactory(Addition):
         key = self.name_formatter_key
         return str(self.manifests.config.get(key) or "")
 
-    def _format_context(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_context(self, context: dict[str, Any]) -> dict[str, Any]:
         """Create format context for storage class name."""
         fmt_context = {
             "app": self.manifests.model.app.name,
@@ -178,18 +179,18 @@ class StorageClassFactory(Addition):
         }
         return fmt_context
 
-    def is_default(self, context: Dict[str, Any] = {}) -> bool:
+    def is_default(self, context: dict[str, Any] = {}) -> bool:
         """Determine if this storage class is the default."""
         def_name: str = ""  # no default-storage configured
         if def_fmt := self.manifests.config.get(CONFIG_DEFAULT_STORAGE):
             def_name = def_fmt.format(**self._format_context(context))
         return def_name == self.name(context)
 
-    def name(self, context: Dict[str, Any] = {}) -> str:
+    def name(self, context: dict[str, Any] = {}) -> str:
         """Create a storage-class name using the name formatter."""
         return self.name_formatter.format(**self._format_context(context))
 
-    def update_params(self, params: Dict[str, str]) -> None:
+    def update_params(self, params: dict[str, str]) -> None:
         """Adjust parameters for storage class."""
         for key, value in self.storage_class_parameters.items():
             if value is None:
@@ -292,7 +293,7 @@ class CephToleration(Toleration):
         )
 
     @classmethod
-    def from_space_separated(cls, tolerations: str) -> List["CephToleration"]:
+    def from_space_separated(cls, tolerations: str) -> list["CephToleration"]:
         """Parses a space separated string of tolerations into a list of Toleration objects.
 
         Raises:
@@ -310,7 +311,7 @@ class ProvisionerAdjustments(Patch):
     PROVISIONER_NAME: str
     PLUGIN_NAME: str
 
-    def tolerations(self) -> Tuple[List[CephToleration], bool]:
+    def tolerations(self) -> tuple[list[CephToleration], bool]:
         return [], False
 
     def adjust_container_specs(self, obj: AnyResource) -> None:

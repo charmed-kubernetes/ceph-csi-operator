@@ -5,7 +5,7 @@ import configparser
 import json
 import logging
 import subprocess
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -95,7 +95,7 @@ class CephCLI:
             config.write(fp)
 
 
-@lru_cache(maxsize=None)
+@cache
 def fsid(cli: CephCLI) -> str:
     """Get the Ceph FSID (cluster ID)"""
     try:
@@ -105,7 +105,7 @@ def fsid(cli: CephCLI) -> str:
         return ""
 
 
-@lru_cache(maxsize=None)
+@cache
 def ls_ceph_fs(cli: CephCLI) -> list[CephFilesystem]:
     """Get a list of CephFS names and list of associated pools."""
     try:

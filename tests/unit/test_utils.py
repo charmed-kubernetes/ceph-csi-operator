@@ -1,6 +1,6 @@
 import json
 import subprocess
-import unittest.mock as mock
+from unittest import mock
 
 import utils
 from manifests_cephfs import CephFilesystem

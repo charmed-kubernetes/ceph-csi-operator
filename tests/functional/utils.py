@@ -5,7 +5,7 @@
 import logging
 import pprint
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from typing import Any
 
 import pytest
 import yaml
@@ -73,9 +73,7 @@ def wait_for_pod(
             )
             logger.info(event_interest)
         pytest.fail(
-            "Timeout after {}s while waiting for {} pod to reach {} status".format(
-                timeout, name, target_state
-            )
+            f"Timeout after {timeout}s while waiting for {name} pod to reach {target_state} status"
         )
 
 
@@ -124,13 +122,11 @@ def wait_for_pvc_resize(
             )
             logger.info(event_interest)
         pytest.fail(
-            "Timeout after {}s while waiting for {} pvc to reach {} bytes".format(
-                timeout, name, at_least
-            )
+            f"Timeout after {timeout}s while waiting for {name} pvc to reach {at_least} bytes"
         )
 
 
-def units_have_status(app: Application, status: str, message_substring: Optional[str] = None):
+def units_have_status(app: Application, status: str, message_substring: str | None = None):
     """Return a function that checks whether all units of an application have a given status.
 
     :param app: The application to check.

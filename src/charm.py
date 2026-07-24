@@ -6,12 +6,12 @@
 import json
 import logging
 from functools import cached_property
-from typing import Any, Dict, List, Optional, Set, cast
+from typing import Any, cast
 
 import charms.contextual_status as status
-import charms.operator_libs_linux.v0.apt as apt
 import ops
 import ops.manifests.literals as manifest_literals
+from charms.operator_libs_linux.v0 import apt
 from charms.reconciler import Reconciler
 from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
@@ -19,7 +19,12 @@ from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
+from ops.manifests import (
+    Collector,
+    HashableResource,
+    ManifestClientError,
+    ResourceAnalysis,
+)
 
 import literals
 import utils
@@ -199,12 +204,12 @@ class CephCsiCharm(ops.CharmBase):
         else:
             self.stored.deployed = True
 
-    def list_storage_classes(self) -> List[StorageClass]:
+    def list_storage_classes(self) -> list[StorageClass]:
         """List all StorageClasses in the cluster."""
         manifest, *_ = self.collector.manifests.values()
         return list(manifest.client.list(StorageClass))
 
-    def cluster_default_storage_classes(self, scs: List[StorageClass]) -> List[StorageClass]:
+    def cluster_default_storage_classes(self, scs: list[StorageClass]) -> list[StorageClass]:
         """Find all default StorageClasses in the cluster."""
         default_scs = [
             sc
@@ -215,7 +220,7 @@ class CephCsiCharm(ops.CharmBase):
         ]
         return default_scs
 
-    def is_default_storage_class_missing(self, scs: List[StorageClass]) -> bool:
+    def is_default_storage_class_missing(self, scs: list[StorageClass]) -> bool:
         """Check if this charm has configured the cluster's default StorageClass."""
         if not self.default_storage_fmt:
             # No default StorageClass configured in charm, so no need to check
@@ -229,7 +234,7 @@ class CephCsiCharm(ops.CharmBase):
         )
 
     def _delete_storage_class(self, event: ops.ActionEvent) -> None:
-        storage_class: Optional[str] = event.params.get("name")
+        storage_class: str | None = event.params.get("name")
         if storage_class not in ["cephfs", "ceph-xfs", "ceph-ext4"]:
             msg = "Invalid storage class name. Must be one of: cephfs, ceph-xfs, ceph-ext4"
             event.fail(msg)
@@ -256,23 +261,23 @@ class CephCsiCharm(ops.CharmBase):
         return str(self.config.get("csidriver-name-formatter") or "{name}")
 
     @property
-    def ceph_data(self) -> Dict[str, Any]:
+    def ceph_data(self) -> dict[str, Any]:
         """Return Ceph data from ceph-client relation"""
         r_data = self.ceph_client.get_relation_data()
         return {k: r_data.get(k) for k in ("auth", "key", "mon_hosts")}
 
     @property
-    def auth(self) -> Optional[str]:
+    def auth(self) -> str | None:
         """Return Ceph auth mode from ceph-client relation"""
         return self.ceph_data["auth"]
 
     @property
-    def key(self) -> Optional[str]:
+    def key(self) -> str | None:
         """Return Ceph key from ceph-client relation"""
         return self.ceph_data["key"]
 
     @property
-    def mon_hosts(self) -> List[str]:
+    def mon_hosts(self) -> list[str]:
         """Return Ceph monitor hosts from ceph-client relation"""
         return self.ceph_data["mon_hosts"] or []
 
@@ -307,7 +312,7 @@ class CephCsiCharm(ops.CharmBase):
         return relation.data[relation.app].get("kubelet-root-dir") or "/var/lib/kubelet"
 
     @property
-    def kubernetes_context(self) -> Dict[str, Any]:
+    def kubernetes_context(self) -> dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {"kubelet_dir": self.kubelet_dir}
 
@@ -317,7 +322,7 @@ class CephCsiCharm(ops.CharmBase):
         return Client(field_manager=f"{self.model.app.name}")
 
     @property
-    def ceph_context(self) -> Dict[str, Any]:
+    def ceph_context(self) -> dict[str, Any]:
         """Return context that can be used to render ceph resource files in templates/ folder."""
         return {
             "auth": self.auth,
@@ -335,7 +340,7 @@ class CephCsiCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("Evaluating kubernetes authentication")
         KubeConfig.from_env()
 
-    def _create_namespace(self, namespace: str) -> Optional[ops.StatusBase]:
+    def _create_namespace(self, namespace: str) -> ops.StatusBase | None:
         """Create the namespace if it does not exist.
 
         Args:
@@ -410,7 +415,7 @@ class CephCsiCharm(ops.CharmBase):
         """Prevent manifest collisions."""
         if self.unit.is_leader():
             self.unit.status = ops.MaintenanceStatus("Detecting manifest collisions")
-            analyses: List[ResourceAnalysis] = self.collector.analyze_resources(event, "", "")
+            analyses: list[ResourceAnalysis] = self.collector.analyze_resources(event, "", "")
             count = sum(len(a.conflicting) for a in analyses)
             if count > 0:
                 msg = f"{count} Kubernetes resource collision{'s'[:count^1]} (action: list-resources)"
@@ -428,7 +433,7 @@ class CephCsiCharm(ops.CharmBase):
                 raise status.ReconcilerError(msg)
 
     def _prevent_multiple_default_storageclasses(
-        self, storage_classes: Set[HashableResource]
+        self, storage_classes: set[HashableResource]
     ) -> None:
         """Prevent multiple StorageClasses from being marked as default.
 
@@ -456,7 +461,7 @@ class CephCsiCharm(ops.CharmBase):
     def evaluate_manifests(self) -> int:
         """Evaluate all manifests."""
         self.unit.status = ops.MaintenanceStatus("Evaluating CephCSI")
-        storage_classes: Set[HashableResource] = set()
+        storage_classes: set[HashableResource] = set()
         new_hash = 0
         for manifest in self.collector.manifests.values():
             manifest = cast(SafeManifest, manifest)

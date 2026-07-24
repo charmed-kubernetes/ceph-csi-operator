@@ -256,7 +256,7 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
       * Create "writing_pod" that uses PersistentVolumeClaim to create file and write data to it.
       * Create "reading_pod" that reads expected data from file in the PersistentVolumeClaim.
     """
-    test_payload = "func-test-write-{}-{}".format(storage_class, str(uuid4()))
+    test_payload = f"func-test-write-{storage_class}-{uuid4()!s}"
 
     config.load_kube_config(str(kube_config))
     k8s_api_client = client.ApiClient()
@@ -289,9 +289,7 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
         wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
         pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
-        assert test_payload in pod_log, "Pod {} failed to read data written by pod {}".format(
-            reading_pod_name, writing_pod_name
-        )
+        assert test_payload in pod_log, f"Pod {reading_pod_name} failed to read data written by pod {writing_pod_name}"
     finally:
         core_api.delete_namespaced_pod(reading_pod_name, namespace)
         core_api.delete_namespaced_pod(writing_pod_name, namespace)
@@ -479,7 +477,7 @@ class TestStorageClass:
             logger.debug("StorageClass: %s; isDefault: %s", name, is_default)
 
             if name not in expected_classes:
-                pytest.fail("Unexpected storage class in the cluster: {}".format(name))
+                pytest.fail(f"Unexpected storage class in the cluster: {name}")
 
         # move currently active default class to last place so we end up with the same
         # cluster setting after the test

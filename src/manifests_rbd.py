@@ -3,7 +3,7 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
@@ -44,7 +44,7 @@ class CephStorageClass(StorageClassFactory):
 
     REQUIRED_CONFIG = {"fsid"}
 
-    def __call__(self) -> Optional[AnyResource]:
+    def __call__(self) -> AnyResource | None:
         """Craft the storage class object."""
         driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
         fs_type = self._fs_type.split("-")[1]
@@ -67,7 +67,7 @@ class CephStorageClass(StorageClassFactory):
             return None
 
         ns = self.manifests.config["namespace"]
-        metadata: Dict = {"name": self.name()}
+        metadata: dict = {"name": self.name()}
         if self.is_default():
             metadata["annotations"] = literals.DEFAULT_SC_ANNOTATION
 
@@ -108,7 +108,7 @@ class RBDProvAdjustments(ProvisionerAdjustments):
     PROVISIONER_NAME = "csi-rbdplugin-provisioner"
     PLUGIN_NAME = "csi-rbdplugin"
 
-    def tolerations(self) -> Tuple[List[CephToleration], bool]:
+    def tolerations(self) -> tuple[list[CephToleration], bool]:
         cfg = self.manifests.config.get("ceph-rbd-tolerations") or ""
         return CephToleration.from_space_separated(cfg), False
 
@@ -147,9 +147,9 @@ class RBDManifests(SafeManifest):
         self.charm = charm
 
     @property
-    def config(self) -> Dict:
+    def config(self) -> dict:
         """Returns current config available from charm config and joined relations."""
-        config: Dict = {}
+        config: dict = {}
 
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.kubernetes_context)
@@ -165,7 +165,7 @@ class RBDManifests(SafeManifest):
         config["csidriver-name-formatter"] = self.charm.stored.drivername
         return config
 
-    def evaluate(self) -> Optional[str]:
+    def evaluate(self) -> str | None:
         """Determine if manifest_config can be applied to manifests."""
         if not self.config.get("enabled"):
             log.info("Skipping CephRBD evaluation since it's disabled")

@@ -7,7 +7,7 @@ import contextlib
 import io
 import json
 import logging
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
@@ -29,7 +29,7 @@ class InvalidMetricsPortError(Exception):
     pass
 
 
-def _validate_metrics_port(metrics_ports: Dict[str, int]) -> None:
+def _validate_metrics_port(metrics_ports: dict[str, int]) -> None:
     """
     Validate the metrics port.
 
@@ -62,7 +62,7 @@ class CephConfig(Addition):
     NAME = "ceph-config"
     REQUIRED_CONFIG = {"auth"}
 
-    def __call__(self) -> Optional[AnyResource]:
+    def __call__(self) -> AnyResource | None:
         """Craft the configMap object."""
         auth = self.manifests.config.get("auth")
         if not auth:
@@ -91,7 +91,7 @@ class EncryptConfig(Addition):
     NAME = "ceph-csi-encryption-kms-config"
     REQUIRED_CONFIG = set()
 
-    def __call__(self) -> Optional[AnyResource]:
+    def __call__(self) -> AnyResource | None:
         log.info(f"Craft {self.NAME} ConfigMap.")
         data = {"config.json": "{}"}
         return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
@@ -103,7 +103,7 @@ class CephCsiConfig(Addition):
     NAME = "ceph-csi-config"
     REQUIRED_CONFIG = {"fsid", "mon_hosts"}
 
-    def __call__(self) -> Optional[AnyResource]:
+    def __call__(self) -> AnyResource | None:
         fsid = self.manifests.config.get("fsid")
         mon_hosts = self.manifests.config.get("mon_hosts")
 
@@ -147,9 +147,9 @@ class ConfigManifests(SafeManifest):
         self.charm = charm
 
     @property
-    def config(self) -> Dict:
+    def config(self) -> dict:
         """Returns current config available from charm config and joined relations."""
-        config: Dict = {}
+        config: dict = {}
         config.update(**self.charm.ceph_context)
         config.update(**self.charm.config)
 
@@ -162,7 +162,7 @@ class ConfigManifests(SafeManifest):
         config["namespace"] = self.namespace
         return config
 
-    def evaluate(self) -> Optional[str]:
+    def evaluate(self) -> str | None:
         """Determine if manifest_config can be applied to manifests."""
         props = CephConfig.REQUIRED_CONFIG | CephCsiConfig.REQUIRED_CONFIG
         for prop in sorted(props):

@@ -1,7 +1,7 @@
 import json
 import logging
-import unittest.mock as mock
 from textwrap import dedent
+from unittest import mock
 
 import pytest
 from lightkube.models.meta_v1 import ObjectMeta
