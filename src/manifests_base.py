@@ -3,7 +3,7 @@ import pickle
 from collections.abc import Generator
 from functools import cached_property
 from hashlib import md5
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.core.resource import NamespacedResource
@@ -55,7 +55,7 @@ class StorageSecret(Addition):
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return Secret.from_dict(dict(metadata=dict(name=self.NAME)))
+            return Secret.from_dict({"metadata": {"name": self.NAME}})
 
         if not self.manifests.config["enabled"]:
             log.info("Ignore Secret from %s", manifest)
@@ -71,7 +71,7 @@ class StorageSecret(Addition):
                     return None
 
         log.info("Modelling secret data for %s.", manifest)
-        return Secret.from_dict(dict(metadata=dict(name=self.NAME), stringData=stringData))
+        return Secret.from_dict({"metadata": {"name": self.NAME}, "stringData": stringData})
 
 
 class AdjustNamespace(Patch):
@@ -88,7 +88,7 @@ class RbacAdjustments(Patch):
     """Update RBAC Attributes."""
 
     RBAC_NAME_FORMATTER = "ceph-rbac-name-formatter"
-    REQUIRED_CONFIG = {RBAC_NAME_FORMATTER}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {RBAC_NAME_FORMATTER}
 
     def _rename(self, name: str) -> str:
         """Rename the object."""
@@ -179,16 +179,18 @@ class StorageClassFactory(Addition):
         }
         return fmt_context
 
-    def is_default(self, context: dict[str, Any] = {}) -> bool:
+    def is_default(self, context: dict[str, Any] | None = None) -> bool:
         """Determine if this storage class is the default."""
+        if context is None:
+            context = {}
         def_name: str = ""  # no default-storage configured
         if def_fmt := self.manifests.config.get(CONFIG_DEFAULT_STORAGE):
             def_name = def_fmt.format(**self._format_context(context))
         return def_name == self.name(context)
 
-    def name(self, context: dict[str, Any] = {}) -> str:
+    def name(self, context: dict[str, Any] | None = None) -> str:
         """Create a storage-class name using the name formatter."""
-        return self.name_formatter.format(**self._format_context(context))
+        return self.name_formatter.format(**self._format_context(context or {}))
 
     def update_params(self, params: dict[str, str]) -> None:
         """Adjust parameters for storage class."""
@@ -369,7 +371,7 @@ class CSIDriverAdjustments(Patch):
     """Update CSI driver."""
 
     NAME_FORMATTER = "csidriver-name-formatter"
-    REQUIRED_CONFIG = {NAME_FORMATTER}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {NAME_FORMATTER}
 
     def __init__(self, manifests: Manifests, default_name: str):
         super().__init__(manifests)

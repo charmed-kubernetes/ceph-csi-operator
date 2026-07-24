@@ -368,7 +368,7 @@ class CephCsiCharm(ops.CharmBase):
                 # Namespace already exists, do not raise an error
                 logger.info("Namespace '%s' already exists", namespace)
             else:
-                logger.exception("Failed to create namespace '%s': %s", namespace, e)
+                logger.exception("Failed to create namespace '%s'", namespace)
                 return ops.WaitingStatus(f"Waiting for namespace: {namespace}")
         return None
 

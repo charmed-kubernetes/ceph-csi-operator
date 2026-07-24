@@ -121,7 +121,7 @@ def ensure_subvolumegroups(cli: CephCLI, volume: str, groups: set[str]) -> None:
     """Get a list of CephFS subvolumegroups."""
     try:
         data = cli.command_json("fs", "subvolumegroup", "ls", volume)
-        current = set(group["name"] for group in data)
+        current = {group["name"] for group in data}
         missing = groups - current
         for group in missing:
             cli.command("fs", "subvolumegroup", "create", volume, group)

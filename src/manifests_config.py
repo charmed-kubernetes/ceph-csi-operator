@@ -7,7 +7,7 @@ import contextlib
 import io
 import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.core_v1 import ConfigMap
@@ -60,7 +60,7 @@ class CephConfig(Addition):
     """Create configmap for the ceph-conf."""
 
     NAME = "ceph-config"
-    REQUIRED_CONFIG = {"auth"}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {"auth"}
 
     def __call__(self) -> AnyResource | None:
         """Craft the configMap object."""
@@ -82,26 +82,26 @@ class CephConfig(Addition):
             output_text = sio.getvalue()
 
         data = {"ceph.conf": output_text, "keyring": ""}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
+        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
 
 
 class EncryptConfig(Addition):
     """Create configmap for the ceph-csi-encryption-kms-config."""
 
     NAME = "ceph-csi-encryption-kms-config"
-    REQUIRED_CONFIG = set()
+    REQUIRED_CONFIG: ClassVar[set[str]] = set()
 
     def __call__(self) -> AnyResource | None:
         log.info(f"Craft {self.NAME} ConfigMap.")
         data = {"config.json": "{}"}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
+        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
 
 
 class CephCsiConfig(Addition):
     """Create configmap for the ceph-csi-config."""
 
     NAME = "ceph-csi-config"
-    REQUIRED_CONFIG = {"fsid", "mon_hosts"}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {"fsid", "mon_hosts"}
 
     def __call__(self) -> AnyResource | None:
         fsid = self.manifests.config.get("fsid")
@@ -124,7 +124,7 @@ class CephCsiConfig(Addition):
             }
         ]
         data = {"config.json": json.dumps(config_json, sort_keys=True)}
-        return ConfigMap.from_dict(dict(metadata=dict(name=self.NAME), data=data))
+        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
 
 
 class ConfigManifests(SafeManifest):

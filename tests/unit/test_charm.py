@@ -420,7 +420,7 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
             "profile rbd, allow rw tag cephfs metadata=*",
         ],
     )
-    reconciled.assert_called_once
+    reconciled.assert_called_once()
 
 
 @mock.patch("charm.CephCsiCharm._purge_manifest")
@@ -465,24 +465,22 @@ def test_action_manifest_resources(harness, lk_client, api_error_klass):
 
     expected_results = {
         "config-missing": "ConfigMap/default/ceph-csi-encryption-kms-config",
-        "rbd-missing": "\n".join(
-            [
-                "CSIDriver/rbd.csi.ceph.com",
-                "ClusterRole/rbd-csi-nodeplugin",
-                "ClusterRole/rbd-external-provisioner-runner",
-                "ClusterRoleBinding/rbd-csi-nodeplugin",
-                "ClusterRoleBinding/rbd-csi-provisioner-role",
-                "DaemonSet/default/csi-rbdplugin",
-                "Deployment/default/csi-rbdplugin-provisioner",
-                "Role/default/rbd-external-provisioner-cfg",
-                "RoleBinding/default/rbd-csi-provisioner-role-cfg",
-                "Service/default/csi-metrics-rbdplugin",
-                "Service/default/csi-rbdplugin-provisioner",
-                "ServiceAccount/default/rbd-csi-nodeplugin",
-                "ServiceAccount/default/rbd-csi-provisioner",
-                "StorageClass/ceph-ext4",
-                "StorageClass/ceph-xfs",
-            ]
+        "rbd-missing": (
+            "CSIDriver/rbd.csi.ceph.com\n"
+            "ClusterRole/rbd-csi-nodeplugin\n"
+            "ClusterRole/rbd-external-provisioner-runner\n"
+            "ClusterRoleBinding/rbd-csi-nodeplugin\n"
+            "ClusterRoleBinding/rbd-csi-provisioner-role\n"
+            "DaemonSet/default/csi-rbdplugin\n"
+            "Deployment/default/csi-rbdplugin-provisioner\n"
+            "Role/default/rbd-external-provisioner-cfg\n"
+            "RoleBinding/default/rbd-csi-provisioner-role-cfg\n"
+            "Service/default/csi-metrics-rbdplugin\n"
+            "Service/default/csi-rbdplugin-provisioner\n"
+            "ServiceAccount/default/rbd-csi-nodeplugin\n"
+            "ServiceAccount/default/rbd-csi-provisioner\n"
+            "StorageClass/ceph-ext4\n"
+            "StorageClass/ceph-xfs"
         ),
     }
     action = harness.run_action("list-resources", {})

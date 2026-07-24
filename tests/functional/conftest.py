@@ -55,8 +55,8 @@ async def kube_config(ops_test: OpsTest) -> AsyncGenerator[Path, None]:
     )
 
     if not success:
-        logging.error(f"status: {action.status}")
-        logging.error(f"results:\n{yaml.safe_dump(action.results, indent=2)}")
+        logger.error(f"status: {action.status}")
+        logger.error(f"results:\n{yaml.safe_dump(action.results, indent=2)}")
         pytest.fail("Failed to copy kubeconfig from k8s")
 
     kubeconfig_path = ops_test.tmp_path / "kubeconfig"
@@ -84,7 +84,7 @@ async def cleanup_k8s(kube_config):
                 core_api.delete_namespaced_pod(pod_name, pod_namespace)
             except client.ApiException as exc:
                 if exc.status != 404:
-                    raise exc
+                    raise
                 logger.debug("Pod %s is already removed", pod_name)
 
     for pvc in core_api.list_namespaced_persistent_volume_claim(pod_namespace).items:
@@ -95,5 +95,5 @@ async def cleanup_k8s(kube_config):
                 core_api.delete_namespaced_persistent_volume_claim(pvc_name, pod_namespace)
             except client.ApiException as exc:
                 if exc.status != 404:
-                    raise exc
+                    raise
                 logger.debug("PersistentVolumeClaim %s is already removed.", pvc_name)

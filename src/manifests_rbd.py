@@ -3,7 +3,7 @@
 """Implementation of rbd specific details of the kubernetes manifests."""
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
@@ -33,7 +33,7 @@ class CephRBDSecret(StorageSecret):
     """Create secret for the deployment."""
 
     NAME = "csi-rbd-secret"
-    REQUIRED_CONFIG = {
+    REQUIRED_CONFIG: ClassVar[dict[str, list[str]]] = {
         "user": ["userID"],
         "kubernetes_key": ["userKey"],
     }
@@ -42,7 +42,7 @@ class CephRBDSecret(StorageSecret):
 class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
-    REQUIRED_CONFIG = {"fsid"}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {"fsid"}
 
     def __call__(self) -> AnyResource | None:
         """Craft the storage class object."""
@@ -53,7 +53,7 @@ class CephStorageClass(StorageClassFactory):
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))
+            return StorageClass.from_dict({"metadata": {}, "provisioner": driver_name})
 
         if not self.manifests.config.get("enabled"):
             log.info(
@@ -91,14 +91,14 @@ class CephStorageClass(StorageClassFactory):
         )
 
         return StorageClass.from_dict(
-            dict(
-                metadata=metadata,
-                provisioner=driver_name,
-                allowVolumeExpansion=True,
-                mountOptions=["discard"],
-                reclaimPolicy=reclaim_policy,
-                parameters=parameters,
-            )
+            {
+                "metadata": metadata,
+                "provisioner": driver_name,
+                "allowVolumeExpansion": True,
+                "mountOptions": ["discard"],
+                "reclaimPolicy": reclaim_policy,
+                "parameters": parameters,
+            }
         )
 
 

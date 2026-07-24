@@ -4,7 +4,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from lightkube.codecs import AnyResource
 from lightkube.resources.storage_v1 import StorageClass
@@ -57,7 +57,7 @@ class CephFSSecret(StorageSecret):
     """Create secret for the deployment."""
 
     NAME = "csi-cephfs-secret"
-    REQUIRED_CONFIG = {
+    REQUIRED_CONFIG: ClassVar[dict[str, list[str]]] = {
         "user": ["userID", "adminID"],
         "kubernetes_key": ["userKey", "adminKey"],
     }
@@ -67,14 +67,14 @@ class CephStorageClass(StorageClassFactory):
     """Create ceph storage classes."""
 
     FILESYSTEM_LISTING = "fs_list"
-    REQUIRED_CONFIG = {"fsid", FILESYSTEM_LISTING}
+    REQUIRED_CONFIG: ClassVar[set[str]] = {"fsid", FILESYSTEM_LISTING}
 
     def create(self, param: CephStorageClassParameters) -> AnyResource:
         """Create a storage class object."""
         driver_name = cast(SafeManifest, self.manifests).csidriver.formatted
 
         ns = self.manifests.config["namespace"]
-        metadata: dict[str, Any] = dict(name=param.storage_class_name)
+        metadata: dict[str, Any] = {"name": param.storage_class_name}
         if param.is_default:
             metadata["annotations"] = literals.DEFAULT_SC_ANNOTATION
 
@@ -101,13 +101,13 @@ class CephStorageClass(StorageClassFactory):
         )
 
         return StorageClass.from_dict(
-            dict(
-                metadata=metadata,
-                provisioner=driver_name,
-                allowVolumeExpansion=True,
-                reclaimPolicy=reclaim_policy,
-                parameters=parameters,
-            )
+            {
+                "metadata": metadata,
+                "provisioner": driver_name,
+                "allowVolumeExpansion": True,
+                "reclaimPolicy": reclaim_policy,
+                "parameters": parameters,
+            }
         )
 
     def parameter_list(self) -> list[CephStorageClassParameters]:
@@ -151,7 +151,7 @@ class CephStorageClass(StorageClassFactory):
                     CephStorageClassParameters(fsid, sc_name, fs.name, data_pool, sc_default)
                 ]
 
-        if len(set(n.storage_class_name for n in sc_names)) != len(sc_names):
+        if len({n.storage_class_name for n in sc_names}) != len(sc_names):
             log.error(
                 "The formatter cannot generate unique storage class names for all the available pools. "
                 "Consider improving the config '%s' to expand to meet the number of pools."
@@ -172,7 +172,7 @@ class CephStorageClass(StorageClassFactory):
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return [StorageClass.from_dict(dict(metadata={}, provisioner=driver_name))]
+            return [StorageClass.from_dict({"metadata": {}, "provisioner": driver_name})]
 
         if not self.manifests.config.get("enabled"):
             log.info("Skipping CephFS storage class creation since it's disabled")

@@ -97,9 +97,11 @@ def test_cli_ensure_subvolumegroups():
     charm = mock.MagicMock()
     cli = utils.CephCLI(charm)
 
-    with mock.patch("utils.CephCLI.command_json", return_value=[]) as json:
-        with mock.patch("utils.CephCLI.command", return_value=[]) as cmd:
-            utils.ensure_subvolumegroups(cli, "ceph-fs", {"group1", "group2"})
+    with (
+        mock.patch("utils.CephCLI.command_json", return_value=[]) as json,
+        mock.patch("utils.CephCLI.command", return_value=[]) as cmd,
+    ):
+        utils.ensure_subvolumegroups(cli, "ceph-fs", {"group1", "group2"})
 
     json.assert_called_once_with("fs", "subvolumegroup", "ls", "ceph-fs")
     cmd.assert_any_call("fs", "subvolumegroup", "create", "ceph-fs", "group1")

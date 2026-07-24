@@ -4,6 +4,7 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 """Functional tests for ceph-csi charm."""
 
+import asyncio
 import json
 import logging
 import re
@@ -43,8 +44,8 @@ WRITING_POD_TEMPLATE = "writing_pod.yaml.j2"
 RUNNING_POD_STATE = "Running"
 SUCCESS_POD_STATE = "Succeeded"
 CEPH_CSI_ALT = "ceph-csi-alt"
-CEPHFS_LS = dict(label_selector="juju.io/manifest=cephfs")
-RBD_LS = dict(label_selector="juju.io/manifest=rbd")
+CEPHFS_LS = {"label_selector": "juju.io/manifest=cephfs"}
+RBD_LS = {"label_selector": "juju.io/manifest=rbd"}
 
 
 def ready_apps(ops_test: OpsTest):
@@ -209,7 +210,7 @@ async def run_resize_storage_class(kube_config: Path, storage_class: str):
             and (final_size := current_size(reporter_pod_name, namespace)) == initial_size
         ):
             logger.info("Waiting for filesystem resize, current size: %s", final_size)
-            time.sleep(1)
+            await asyncio.sleep(1)
             timeout -= 1
 
         logger.info("Final stats: %s", final_size)
