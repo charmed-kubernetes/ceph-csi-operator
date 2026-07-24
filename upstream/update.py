@@ -11,11 +11,12 @@ import subprocess
 import urllib.error
 import urllib.request
 from collections import defaultdict
+from collections.abc import Generator
 from dataclasses import dataclass
 from itertools import accumulate
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Generator, List, Optional, Set, TypedDict
+from typing import TypedDict
 
 import yaml
 from semver import VersionInfo
@@ -27,37 +28,37 @@ GH_TAGS = "https://api.github.com/repos/{repo}/tags"
 GH_RAW = "https://raw.githubusercontent.com/{repo}/{rel}/{path}/{manifest}"
 ROCKS_CC = "ghcr.io/canonical/cdk"
 
-SOURCES = dict(
-    rbd=dict(
-        repo="ceph/ceph-csi",
-        release_tags=True,
-        path="deploy/rbd/kubernetes",
-        manifests=[
+SOURCES = {
+    "rbd": {
+        "repo": "ceph/ceph-csi",
+        "release_tags": True,
+        "path": "deploy/rbd/kubernetes",
+        "manifests": [
             "csi-nodeplugin-rbac.yaml",
             "csi-provisioner-rbac.yaml",
             "csi-rbdplugin-provisioner.yaml",
             "csi-rbdplugin.yaml",
         ],
-        version_parser=VersionInfo.parse,
-        minimum="v3.7.2",
-        maximum="v999.0.0",
-    ),
-    cephfs=dict(
-        repo="ceph/ceph-csi",
-        release_tags=True,
-        manifests=[
+        "version_parser": VersionInfo.parse,
+        "minimum": "v3.7.2",
+        "maximum": "v999.0.0",
+    },
+    "cephfs": {
+        "repo": "ceph/ceph-csi",
+        "release_tags": True,
+        "manifests": [
             "csi-cephfsplugin-provisioner.yaml",
             "csi-cephfsplugin.yaml",
             "csi-nodeplugin-rbac.yaml",
             "csi-provisioner-rbac.yaml",
             "csidriver.yaml",
         ],
-        path="deploy/cephfs/kubernetes",
-        version_parser=VersionInfo.parse,
-        minimum="v3.7.2",
-        maximum="v999.0.0",
-    ),
-)
+        "path": "deploy/cephfs/kubernetes",
+        "version_parser": VersionInfo.parse,
+        "minimum": "v3.7.2",
+        "maximum": "v999.0.0",
+    },
+}
 FILEDIR = Path(__file__).parent
 VERSION_RE = re.compile(r"^v\d+\.\d+")
 IMG_RE = re.compile(r"^\s+image:\s+(\S+)")
@@ -68,7 +69,7 @@ class Registry:
     """Object to define how to contact a Registry."""
 
     base: str
-    user_pass: Optional[str] = None
+    user_pass: str | None = None
 
     @property
     def name(self) -> str:
@@ -76,7 +77,7 @@ class Registry:
         return name
 
     @property
-    def path(self) -> List[str]:
+    def path(self) -> list[str]:
         _, *path = self.base.split("/")
         return path
 
@@ -91,7 +92,7 @@ class Registry:
         return pw
 
     @property
-    def creds(self) -> List["SyncCreds"]:
+    def creds(self) -> list["SyncCreds"]:
         """Get credentials as a SyncCreds Dict."""
         creds = []
         if self.user_pass:
@@ -110,7 +111,7 @@ class Release:
     """Defines a release type."""
 
     name: str
-    paths: List[Path]
+    paths: list[Path]
 
     def __hash__(self) -> int:
         """Unique based on its name."""
@@ -134,8 +135,8 @@ class SyncConfig(TypedDict):
     """Type definition for building sync config."""
 
     version: int
-    creds: List[SyncCreds]
-    sync: List[SyncAsset]
+    creds: list[SyncCreds]
+    sync: list[SyncAsset]
 
 
 def sync_asset(image: str, registry: Registry):
@@ -154,12 +155,12 @@ def main(source: str, registry: Registry, check: bool, debug: bool):
     for release in new_releases:
         local_releases.add(download(source, release))
     unique_releases = list(dict.fromkeys(accumulate((sorted(local_releases)), dedupe)))
-    all_images = set(image for release in unique_releases for image in images(release))
+    all_images = {image for release in unique_releases for image in images(release)}
     mirror_image(all_images, registry, check, debug)
     return unique_releases[-1].name, all_images
 
 
-def gather_releases(source: str) -> Set[Release]:
+def gather_releases(source: str) -> set[Release]:
     """Fetch from github the release manifests by version."""
     context = dict(**SOURCES[source])
     version_parser = context["version_parser"]
@@ -193,14 +194,14 @@ def gather_releases(source: str) -> Set[Release]:
     return set(releases)
 
 
-def gather_current(source: str) -> Set[Release]:
+def gather_current(source: str) -> set[Release]:
     """Gather currently supported manifests by the charm."""
     manifests = SOURCES[source]["manifests"]
     releases = defaultdict(list)
     for release_path in (FILEDIR / source / "manifests").glob("*/*.yaml"):
         if release_path.name in manifests:
             releases[release_path.parent.name].append(release_path)
-    return set(Release(version, files) for version, files in releases.items())
+    return {Release(version, files) for version, files in releases.items()}
 
 
 def download(source: str, release: Release) -> Release:
@@ -222,7 +223,7 @@ def dedupe(this: Release, next: Release) -> Release:
     returns this release if this==next by content
     returns next release if this!=next by content
     """
-    files_this, files_next = (set(path.name for path in rel.paths) for rel in (this, next))
+    files_this, files_next = ({path.name for path in rel.paths} for rel in (this, next))
     if files_this != files_next:
         # Found a different set of files
         return next
@@ -256,7 +257,7 @@ def images(release: Release) -> Generator[str, None, None]:
                     yield m.groups()[0]
 
 
-def mirror_image(images: List[str], registry: Registry, check: bool, debug: bool):
+def mirror_image(images: list[str], registry: Registry, check: bool, debug: bool):
     """Synchronize all source images to target registry, only pushing changed layers."""
     sync_config = SyncConfig(
         version=1,
