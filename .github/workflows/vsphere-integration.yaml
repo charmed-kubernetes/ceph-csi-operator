@@ -63,7 +63,7 @@ jobs:
             ${{ vars.VSPHERE_BOOTSTRAP_DATASTORE }}
             ${{ vars.VSPHERE_BOOTSTRAP_VLAN_2763 }}
             ${{ vars.VSPHERE_BOOTSTRAP_HARDWARE_VERSION }}
-            --config caas-image-repo=rocks.canonical.com/cdk/jujusolutions
+            --config caas-image-repo=ghcr.io/canonical/cdk/jujusolutions
 
       - if: ${{ needs.charm-source.outputs.channel }}
         name: Test from ceph-csi channel=${{ needs.charm-source.outputs.channel }}
