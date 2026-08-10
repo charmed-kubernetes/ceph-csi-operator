@@ -19,12 +19,7 @@ from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import (
-    Collector,
-    HashableResource,
-    ManifestClientError,
-    ResourceAnalysis,
-)
+from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
 
 import literals
 import utils

@@ -14,12 +14,7 @@ from charms.operator_libs_linux.v0 import apt
 from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.storage_v1 import StorageClass
-from ops.manifests import (
-    HashableResource,
-    ManifestClientError,
-    ManifestLabel,
-    ResourceAnalysis,
-)
+from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
 
 import literals
