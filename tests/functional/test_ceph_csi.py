@@ -290,7 +290,9 @@ async def run_test_storage_class(kube_config: Path, storage_class: str):
         wait_for_pod(core_api, reading_pod_name, namespace, target_state=SUCCESS_POD_STATE)
 
         pod_log = core_api.read_namespaced_pod_log(reading_pod_name, namespace)
-        assert test_payload in pod_log, f"Pod {reading_pod_name} failed to read data written by pod {writing_pod_name}"
+        assert (
+            test_payload in pod_log
+        ), f"Pod {reading_pod_name} failed to read data written by pod {writing_pod_name}"
     finally:
         core_api.delete_namespaced_pod(reading_pod_name, namespace)
         core_api.delete_namespaced_pod(writing_pod_name, namespace)

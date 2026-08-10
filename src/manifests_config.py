@@ -82,7 +82,9 @@ class CephConfig(Addition):
             output_text = sio.getvalue()
 
         data = {"ceph.conf": output_text, "keyring": ""}
-        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        return cast(
+            AnyResource, ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        )
 
 
 class EncryptConfig(Addition):
@@ -94,7 +96,9 @@ class EncryptConfig(Addition):
     def __call__(self) -> AnyResource | None:
         log.info(f"Craft {self.NAME} ConfigMap.")
         data = {"config.json": "{}"}
-        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        return cast(
+            AnyResource, ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        )
 
 
 class CephCsiConfig(Addition):
@@ -124,7 +128,9 @@ class CephCsiConfig(Addition):
             }
         ]
         data = {"config.json": json.dumps(config_json, sort_keys=True)}
-        return ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        return cast(
+            AnyResource, ConfigMap.from_dict({"metadata": {"name": self.NAME}, "data": data})
+        )
 
 
 class ConfigManifests(SafeManifest):

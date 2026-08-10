@@ -44,8 +44,8 @@ class SafeManifest(Manifests):
 class StorageSecret(Addition):
     """Create secret for the Provider."""
 
-    NAME: str
-    REQUIRED_CONFIG: dict[str, list[str]]
+    NAME: ClassVar[str]
+    REQUIRED_CONFIG: ClassVar[dict[str, list[str]]]
 
     def __call__(self) -> AnyResource | None:
         """Craft the secrets object for the deployment."""
@@ -55,7 +55,7 @@ class StorageSecret(Addition):
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return Secret.from_dict({"metadata": {"name": self.NAME}})
+            return cast(AnyResource, Secret.from_dict({"metadata": {"name": self.NAME}}))
 
         if not self.manifests.config["enabled"]:
             log.info("Ignore Secret from %s", manifest)
@@ -71,7 +71,10 @@ class StorageSecret(Addition):
                     return None
 
         log.info("Modelling secret data for %s.", manifest)
-        return Secret.from_dict({"metadata": {"name": self.NAME}, "stringData": stringData})
+        return cast(
+            AnyResource,
+            Secret.from_dict({"metadata": {"name": self.NAME}, "stringData": stringData}),
+        )
 
 
 class AdjustNamespace(Patch):

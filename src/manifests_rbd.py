@@ -53,7 +53,9 @@ class CephStorageClass(StorageClassFactory):
             # If we are purging, we may not be able to create any storage classes
             # Just return a fake storage class to satisfy delete_manifests method
             # which will look up all storage classes installed by this app/manifest
-            return StorageClass.from_dict({"metadata": {}, "provisioner": driver_name})
+            return cast(
+                AnyResource, StorageClass.from_dict({"metadata": {}, "provisioner": driver_name})
+            )
 
         if not self.manifests.config.get("enabled"):
             log.info(
@@ -90,15 +92,18 @@ class CephStorageClass(StorageClassFactory):
             literals.CONFIG_RECLAIM_POLICY, literals.CONFIG_RECLAIM_POLICY_DEFAULT
         )
 
-        return StorageClass.from_dict(
-            {
-                "metadata": metadata,
-                "provisioner": driver_name,
-                "allowVolumeExpansion": True,
-                "mountOptions": ["discard"],
-                "reclaimPolicy": reclaim_policy,
-                "parameters": parameters,
-            }
+        return cast(
+            AnyResource,
+            StorageClass.from_dict(
+                {
+                    "metadata": metadata,
+                    "provisioner": driver_name,
+                    "allowVolumeExpansion": True,
+                    "mountOptions": ["discard"],
+                    "reclaimPolicy": reclaim_policy,
+                    "parameters": parameters,
+                }
+            ),
         )
 
 
