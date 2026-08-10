@@ -12,7 +12,7 @@ import ops
 import pytest
 from charms.operator_libs_linux.v0 import apt
 from lightkube.core.exceptions import ApiError
-from lightkube.models.meta_v1 import ObjectMeta
+from lightkube.models.meta_v1 import ObjectMeta, Status
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import HashableResource, ManifestClientError, ManifestLabel, ResourceAnalysis
 from ops.testing import Harness
@@ -85,6 +85,11 @@ def reconcile_this(harness, method):
     harness.charm.reconciler.reconcile_function = method
     yield
     harness.charm.reconciler.reconcile_function = previous
+
+
+def make_api_error(code: int, message: str) -> ApiError:
+    """Build a lightkube ApiError with a real Status object for test stability."""
+    return ApiError(status=Status(code=code, message=message))
 
 
 @contextlib.contextmanager
@@ -166,18 +171,9 @@ def test_check_namespace_creation_allowed(harness, lk_charm_client):
     harness.update_config({"create-namespace": True})
     harness.begin()
 
-    not_found = ApiError(response=mock.MagicMock())
-    duplicate = ApiError(response=mock.MagicMock())
-    error = ApiError(response=mock.MagicMock())
-
-    not_found.status.code = 404
-    not_found.status.message = "not found"
-
-    duplicate.status.code = 409
-    duplicate.status.message = "duplicate found"
-
-    error.status.code = 503
-    error.status.message = "service unavailable"
+    not_found = make_api_error(404, "not found")
+    duplicate = make_api_error(409, "duplicate found")
+    error = make_api_error(503, "service unavailable")
 
     # first return a 404 to force creation of the namespace
     lk_charm_client.get.side_effect = not_found
@@ -206,11 +202,7 @@ def test_check_namespace(harness, leadership, lk_charm_client):
     harness.set_leader(leadership)
     harness.begin()
 
-    api_error = ApiError(response=mock.MagicMock())
-
-    # should be blocked if the ns doesn't exist
-    api_error.status.code = 404
-    api_error.status.message = "not found"
+    api_error = make_api_error(404, "not found")
     lk_charm_client.get.side_effect = api_error
 
     with reconcile_this(harness, lambda _: harness.charm.check_namespace()):
@@ -395,7 +387,7 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
 
     # add ceph-client relation
     reconciled = mock.MagicMock()
-    with reconcile_this(harness, lambda _: reconciled):
+    with reconcile_this(harness, lambda _: reconciled()):
         relation_id = harness.add_relation(literals.CEPH_CLIENT_RELATION, "ceph-mon")
         harness.add_relation_unit(relation_id, "ceph-mon/0")
 
@@ -415,7 +407,7 @@ def test_ceph_client_broker_available(create_replicated_pool, request_ceph_permi
             "profile rbd, allow rw tag cephfs metadata=*",
         ],
     )
-    reconciled.assert_called_once()
+    assert reconciled.called
 
 
 @mock.patch("charm.CephCsiCharm._purge_manifest")
