@@ -294,18 +294,18 @@ config:
 
     image-registry:
       type: string
-      default: "rocks.canonical.com/cdk"
+      default: "ghcr.io/canonical/cdk"
       description: |
         Image registry for all Ceph CSI container images.
 
         This value replaces the image registry in image URLs from the release
         manifests. For example, an image URL like
         `quay.io/cephcsi/cephcsi:v3.8.0` becomes
-        `rocks.canonical.com/cdk/cephcsi/cephcsi:v3.8.0` if set to
-        `rocks.canonical.com/cdk`.
+        `ghcr.io/canonical/cdk/cephcsi/cephcsi:v3.8.0` if set to
+        `ghcr.io/canonical/cdk`.
 
         Example:
-          juju config ceph-csi image-registry="rocks.canonical.com/cdk"
+          juju config ceph-csi image-registry="ghcr.io/canonical/cdk"
 
     metrics-port-cephfsplugin:
       default: -1
