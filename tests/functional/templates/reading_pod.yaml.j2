@@ -11,8 +11,8 @@ spec:
       readOnly: false
   containers:
     - name: read-test-{{ storage_class }}
-      #  rocks registry is used because we were hitting rate limits in dockerhub
-      image: rocks.canonical.com:443/cdk/ubuntu:jammy
+      # GHCR mirror is used to avoid Docker Hub rate limits.
+      image: ghcr.io/canonical/cdk/ubuntu:jammy
       command: ["/bin/bash", "-c", "cat /data/juju"]
       volumeMounts:
       - name: shared-data
