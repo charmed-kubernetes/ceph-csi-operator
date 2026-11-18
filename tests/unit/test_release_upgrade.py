@@ -325,11 +325,36 @@ def test_deleted_workloads_can_be_recovered(harness, lk_client, not_found):
 
 
 def test_pin_hint_orders_releases_numerically(harness, lk_client, not_found):
+    """v3.10.0 is newer than v3.9.0, which a string sort would get backwards."""
+    harness.update_config({"cephfs-enable": True})
     harness.begin()
     deploy(lk_client, not_found, *releases(rbd="v3.9.0", cephfs="v3.10.0"))
     message = guard(harness)
-    assert "release=v3.9.0" in message
-    assert "next: v3.10.x" in message
+    assert "release=v3.10.0" in message
+    assert "next: v3.11.x" in message
+
+
+def test_stale_remembered_release_cannot_deadlock_the_guard(harness, lk_client, not_found):
+    """rbd was disabled at v3.9.0 while cephfs stepped on to v3.12.0; re-enabling rbd."""
+    harness.update_config({"cephfs-enable": True, "release": "v3.12.0"})
+    harness.begin()
+    harness.charm.stored.deployed_releases = {"rbd": "v3.9.0"}
+    deploy(lk_client, not_found, *releases(rbd=None, cephfs="v3.12.0"))
+    assert guard(harness) is None  # the observed release wins over the stale memory
+
+    harness.update_config({"release": "v3.18.2"})
+    message = guard(harness)
+    assert "release=v3.12.0" in message  # a pinnable release always exists
+    harness.update_config({"release": "v3.12.0"})
+    assert guard(harness) is None
+
+
+def test_sync_resources_does_not_record_a_release(harness, lk_client, not_found):
+    harness.begin()
+    deploy(lk_client, not_found, *releases(rbd="v3.17.2"))
+    with mock.patch.object(harness.charm.collector, "apply_missing_resources"):
+        harness.run_action("sync-resources", {})
+    assert dict(harness.charm.stored.deployed_releases) == {}
 
 
 def test_disable_then_enable_cannot_bypass_the_guard(harness, lk_client, not_found):

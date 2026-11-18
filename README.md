@@ -85,10 +85,14 @@ disabling a component (`ceph-rbd-enable=false`, `cephfs-enable=false`) or
 deleting its workloads does not remove the staged-upgrade check: re-enabling
 it on a newer default is blocked until the remembered release is pinned and
 stepped. A component with no workloads and no remembered release (a new
-installation) is applied directly. **Limitation:** the memory lives in the
-charm's local state, so workloads that were deleted by hand before the charm
-first recorded a release (charm versions without this record) cannot be
-checked; pin the release you know was deployed. If `release` is pinned back to
+installation) is applied directly. A remembered release that contradicts the
+workloads that are actually running (more than one minor apart) is ignored, so
+there is always a release that can be pinned. **Limitations:** the record is
+kept in the charm's local state on the leader unit and is written only when the
+charm applies its manifests (not by `sync-resources`). After a leader change the
+new leader starts without it, and workloads deleted by hand before any release
+was recorded cannot be checked either; in both cases pin the release you know
+was deployed before re-enabling a component or refreshing. If `release` is pinned back to
 the deployed release and the workloads are missing, run the `sync-resources`
 action to recreate them.
 
@@ -100,7 +104,7 @@ driver image tag visible again through the image registry or release settings.
 Do not delete the Ceph CSI workloads to get past this: deleting nodeplugin pods
 disrupts mounted volumes (CephFS FUSE mounts in particular must follow the
 controlled restart procedure in the [upgrade guide][5]) and the guard would
-then treat the namespace as a new installation.
+then treat the namespace as a new installation unless a release was recorded.
 
 Before using v3.18 standard images on amd64, qualify the nodes against the
 [upstream CPU requirements][6]: the v3.18 images are built on Rocky Linux 10

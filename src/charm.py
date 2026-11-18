@@ -77,6 +77,12 @@ def _is_staged_upgrade(current: str, target: str) -> bool:
     return new >= old and new[0] == old[0] and new[1] - old[1] <= 1
 
 
+def _compatible(a: str, b: str) -> bool:
+    """Determine whether one target release can be reached from both a and b."""
+    old, new = _release_tuple(a), _release_tuple(b)
+    return old is not None and new is not None and old[0] == new[0] and abs(old[1] - new[1]) <= 1
+
+
 def _rollout_pending(obj: Union[DaemonSet, Deployment]) -> bool:
     """Determine whether a deployed workload is still rolling out."""
     meta = obj.metadata
@@ -270,7 +276,6 @@ class CephCsiCharm(ops.CharmBase):
         try:
             self.check_release_upgrade()
             self.collector.apply_missing_resources(event, manifests, resources)
-            self._record_deployed_releases()
         except status.ReconcilerError as e:
             event.fail(str(e))
         except ManifestClientError as e:
@@ -625,13 +630,24 @@ class CephCsiCharm(ops.CharmBase):
             _blocked(f"Unsupported release '{target}'; run list-versions for valid releases")
 
         states = [self._workload_state(component) for component in enabled]
-        remembered = cast(Dict[str, str], self.stored.deployed_releases)
-        for component, state in zip(enabled, states):
-            # Without workloads (component disabled, or workloads deleted) the volumes
-            # still belong to the last release this charm applied.
-            if not state.releases and not state.indeterminate and component in remembered:
-                state.releases.add(remembered[component])
         deployed = {release for state in states for release in state.releases}
+        # Without workloads (component disabled, or workloads deleted) the volumes still
+        # belong to the last release this charm applied. A remembered release that cannot
+        # be reconciled with what is observed (or with a newer remembered release) is stale;
+        # honouring it would leave no release that could be pinned.
+        remembered = cast(Dict[str, str], self.stored.deployed_releases)
+        for component in sorted(
+            (
+                c
+                for c, state in zip(enabled, states)
+                if not state.releases and not state.indeterminate
+            ),
+            key=lambda c: _release_tuple(remembered.get(c, "")) or (0, 0, 0),
+            reverse=True,
+        ):
+            release = remembered.get(component)
+            if release and all(_compatible(release, other) for other in deployed):
+                deployed.add(release)
         unreachable = sorted(
             (r for r in deployed if not _is_staged_upgrade(r, target)),
             key=lambda r: _release_tuple(r) or (0, 0, 0),
@@ -645,22 +661,24 @@ class CephCsiCharm(ops.CharmBase):
                 "registry or release config so the tag is visible) and check the workload "
                 "images with kubectl. Do not delete the Ceph CSI workloads: removing nodeplugin "
                 "pods disrupts mounted volumes (CephFS FUSE mounts in particular, see the "
-                "upstream upgrade guide), and an empty namespace is treated as a new "
-                "installation, which loses the staged-upgrade check."
+                "upstream upgrade guide), and once the workloads are gone the charm may treat the "
+                "namespace as a new installation and skip the staged-upgrade check "
+                "(unless it recorded the release it applied earlier)."
             )
         target_tuple = _release_tuple(target) or (0, 0, 0)
         newer = [r for r in unreachable if (_release_tuple(r) or (0, 0, 0)) > target_tuple]
         if newer:
             _blocked(
                 f"Ceph CSI {newer[-1]} -> {target} is a downgrade, which upstream does not "
-                f"support. Pin release={newer[-1]}."
+                f"support. Pin release={max(deployed, key=lambda r: _release_tuple(r) or ())}."
             )
         if unreachable:
             old = unreachable[0]
-            major, minor, _ = _release_tuple(old) or (0, 0, 0)
+            newest = max(deployed, key=lambda r: _release_tuple(r) or ())
+            major, minor, _ = _release_tuple(newest) or (0, 0, 0)
             _blocked(
                 f"Ceph CSI {old} -> {target} skips releases upstream does not support. "
-                f"Pin release={old}, then upgrade one minor release at a time (next: "
+                f"Pin release={newest}, then upgrade one minor release at a time (next: "
                 f"v{major}.{minor + 1}.x, see list-versions), waiting for both workloads "
                 "to become ready at each step."
             )
