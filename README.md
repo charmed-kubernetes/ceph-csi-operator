@@ -92,7 +92,14 @@ kept in the charm's local state on the leader unit and is written only when the
 charm applies its manifests (not by `sync-resources`). After a leader change the
 new leader starts without it, and workloads deleted by hand before any release
 was recorded cannot be checked either; in both cases pin the release you know
-was deployed before re-enabling a component or refreshing. If `release` is pinned back to
+was deployed before re-enabling a component or refreshing. A remembered release
+that is ignored because it is incompatible with the running workloads is not
+checked: with the rbd record at v3.9.0 and no rbd workloads, cephfs running
+v3.18.2 and rbd re-enabled at target v3.18.2, the guard does not block and rbd
+jumps v3.9.0 → v3.18.2. There is a single global `release` option, so a
+guard-only fix would reintroduce the unsatisfiable (deadlocked) state. Mitigate by
+re-enabling and stepping both components together, with the one global `release`
+pinned and moved one minor at a time. If `release` is pinned back to
 the deployed release and the workloads are missing, run the `sync-resources`
 action to recreate them.
 

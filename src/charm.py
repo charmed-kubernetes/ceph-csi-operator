@@ -675,12 +675,23 @@ class CephCsiCharm(ops.CharmBase):
         if unreachable:
             old = unreachable[0]
             newest = max(deployed, key=lambda r: _release_tuple(r) or ())
-            major, minor, _ = _release_tuple(newest) or (0, 0, 0)
+            if newest == target:
+                # Pinning the target would change nothing: the lagging workload must catch up.
+                major, minor, _ = _release_tuple(old) or (0, 0, 0)
+                advice = (
+                    f"The workloads are more than one minor release apart and the lagging "
+                    f"{old} workload has to be stepped one minor release at a time "
+                    f"(next: v{major}.{minor + 1}.x, see list-versions)"
+                )
+            else:
+                major, minor, _ = _release_tuple(newest) or (0, 0, 0)
+                advice = (
+                    f"Pin release={newest}, then upgrade one minor release at a time "
+                    f"(next: v{major}.{minor + 1}.x, see list-versions)"
+                )
             _blocked(
                 f"Ceph CSI {old} -> {target} skips releases upstream does not support. "
-                f"Pin release={newest}, then upgrade one minor release at a time (next: "
-                f"v{major}.{minor + 1}.x, see list-versions), waiting for both workloads "
-                "to become ready at each step."
+                f"{advice}, waiting for both workloads to become ready at each step."
             )
         if deployed - {target} and any(state.pending for state in states):
             # Converging on the target is allowed, but only one rollout at a time.
