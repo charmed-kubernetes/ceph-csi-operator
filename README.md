@@ -75,15 +75,48 @@ applies anything. While a previous release is still rolling out the unit waits.
 Step through the minors with `juju config ceph-csi release=<next-release>`,
 waiting for both the provisioner and nodeplugin workloads to become ready and
 checking existing PVC I/O each time. For a deployment on v3.16, the final steps
-are v3.16.3 → v3.17.2 → v3.18.2. Workloads whose release cannot be read from the
-driver image tag block the upgrade until they are removed or restored.
+are v3.16.3 → v3.17.2 → v3.18.2. A deployment on the previous default v3.9.0
+needs nine such steps: v3.10, v3.11, v3.12, v3.13, v3.14, v3.15, v3.16, v3.17
+and v3.18 (take the exact patch tags from `juju run ceph-csi/leader list-versions`).
+Every intermediate image must be available in the configured image registry.
 
-Before using v3.17/v3.18 standard images on amd64, qualify the nodes against the
-[upstream CPU requirements][6]: Rocky Linux 10 images no longer run on older
-x86-64-v2 CPUs. Upstream offers separately tagged Rocky Linux 9 alternatives,
-but this charm bundles the standard release manifests. Arm64 remains experimental
-upstream. Image availability and architecture support must be checked in the
-configured image registry before upgrading.
+The charm remembers the release it last applied for each component, so
+disabling a component (`ceph-rbd-enable=false`, `cephfs-enable=false`) or
+deleting its workloads does not remove the staged-upgrade check: re-enabling
+it on a newer default is blocked until the remembered release is pinned and
+stepped. A component with no workloads and no remembered release (a new
+installation) is applied directly. **Limitation:** the memory lives in the
+charm's local state, so workloads that were deleted by hand before the charm
+first recorded a release (charm versions without this record) cannot be
+checked; pin the release you know was deployed. If `release` is pinned back to
+the deployed release and the workloads are missing, run the `sync-resources`
+action to recreate them.
+
+If the unit reports that the deployed release cannot be determined, a driver
+image does not carry a `vX.Y.Z` tag (for example a digest, or an alternative
+tag such as `v3.17.2-rocky9`). Check the images with
+`kubectl -n <namespace> get daemonset,deployment -o wide`, and make the
+driver image tag visible again through the image registry or release settings.
+Do not delete the Ceph CSI workloads to get past this: deleting nodeplugin pods
+disrupts mounted volumes (CephFS FUSE mounts in particular must follow the
+controlled restart procedure in the [upgrade guide][5]) and the guard would
+then treat the namespace as a new installation.
+
+Before using v3.18 standard images on amd64, qualify the nodes against the
+[upstream CPU requirements][6]: the v3.18 images are built on Rocky Linux 10
+(first in v3.18.0; `build.env` of v3.17.2 and earlier still uses the
+`ceph/ceph:v20` base) and no longer run on older x86-64-v2 CPUs. Fleets on such
+CPUs can stay on v3.17.2, which is not affected. Upstream offers separately
+tagged Rocky Linux 9 alternatives, but this charm bundles the standard release
+manifests. Arm64 remains experimental upstream. Image availability and
+architecture support must be checked in the configured image registry before
+upgrading.
+
+The RBD bundles v3.12.0–v3.16.0 lack the upstream `csidriver.yaml` (a
+pre-existing updater omission); a fresh installation pinned to one of those
+releases does not create the `rbd.csi.ceph.com` CSIDriver. Upgrades through
+those releases are unaffected because the object created by v3.11 or earlier
+persists. v3.16.3 and newer include it.
 
 The charm retains upstream CSI sidecars, RBAC and snapshot API use; it does not
 install the cluster-wide snapshot controller or snapshot CRDs. Administrators

@@ -237,6 +237,8 @@ class CephCsiCharm(ops.CharmBase):
         self.stored.set_default(destroying=False)  # True when the charm is being shutdown
         self.stored.set_default(namespace=self._configured_ns)
         self.stored.set_default(drivername=self._configured_drivername)
+        # release last applied per component; outlives its workloads (disable, deletion)
+        self.stored.set_default(deployed_releases={})
 
         self.collector = Collector(
             ConfigManifests(self),
@@ -268,6 +270,7 @@ class CephCsiCharm(ops.CharmBase):
         try:
             self.check_release_upgrade()
             self.collector.apply_missing_resources(event, manifests, resources)
+            self._record_deployed_releases()
         except status.ReconcilerError as e:
             event.fail(str(e))
         except ManifestClientError as e:
@@ -590,6 +593,21 @@ class CephCsiCharm(ops.CharmBase):
 
         return WorkloadState(releases, indeterminate, pending)
 
+    def _enabled_components(self) -> List[str]:
+        """List the Ceph CSI components enabled by the charm config."""
+        return [
+            component
+            for component in ("rbd", "cephfs")
+            if self.collector.manifests[component].config["enabled"]
+        ]
+
+    def _record_deployed_releases(self) -> None:
+        """Remember the release applied for each enabled component."""
+        recorded = dict(cast(Dict[str, str], self.stored.deployed_releases))
+        for component in self._enabled_components():
+            recorded[component] = self.collector.manifests[component].current_release
+        self.stored.deployed_releases = recorded
+
     def check_release_upgrade(self) -> None:
         """Allow only the release transitions upstream documents as supported.
 
@@ -598,11 +616,7 @@ class CephCsiCharm(ops.CharmBase):
         predecessor. Applying manifests on top of an unknown or more distant
         release is blocked with recovery instructions instead of attempted.
         """
-        enabled = [
-            component
-            for component in ("rbd", "cephfs")
-            if self.collector.manifests[component].config["enabled"]
-        ]
+        enabled = self._enabled_components()
         if not enabled:
             return
         # RBD and CephFS share the single `release` option, so one target applies to both.
@@ -611,21 +625,44 @@ class CephCsiCharm(ops.CharmBase):
             _blocked(f"Unsupported release '{target}'; run list-versions for valid releases")
 
         states = [self._workload_state(component) for component in enabled]
+        remembered = cast(Dict[str, str], self.stored.deployed_releases)
+        for component, state in zip(enabled, states):
+            # Without workloads (component disabled, or workloads deleted) the volumes
+            # still belong to the last release this charm applied.
+            if not state.releases and not state.indeterminate and component in remembered:
+                state.releases.add(remembered[component])
         deployed = {release for state in states for release in state.releases}
-        unreachable = sorted(r for r in deployed if not _is_staged_upgrade(r, target))
+        unreachable = sorted(
+            (r for r in deployed if not _is_staged_upgrade(r, target)),
+            key=lambda r: _release_tuple(r) or (0, 0, 0),
+        )
 
         if any(state.indeterminate for state in states):
             # A workload exists, but the release it runs cannot be read from its image.
             _blocked(
                 "Cannot determine the deployed Ceph CSI release from the workload images. "
-                "Delete the unidentifiable Ceph CSI workloads, or restore a release tag on "
-                "their driver image, before upgrading one minor release at a time."
+                "Use a driver image tag of the form vX.Y.Z (for example, fix the image "
+                "registry or release config so the tag is visible) and check the workload "
+                "images with kubectl. Do not delete the Ceph CSI workloads: removing nodeplugin "
+                "pods disrupts mounted volumes (CephFS FUSE mounts in particular, see the "
+                "upstream upgrade guide), and an empty namespace is treated as a new "
+                "installation, which loses the staged-upgrade check."
+            )
+        target_tuple = _release_tuple(target) or (0, 0, 0)
+        newer = [r for r in unreachable if (_release_tuple(r) or (0, 0, 0)) > target_tuple]
+        if newer:
+            _blocked(
+                f"Ceph CSI {newer[-1]} -> {target} is a downgrade, which upstream does not "
+                f"support. Pin release={newer[-1]}."
             )
         if unreachable:
+            old = unreachable[0]
+            major, minor, _ = _release_tuple(old) or (0, 0, 0)
             _blocked(
-                f"Ceph CSI {', '.join(unreachable)} -> {target} skips releases upstream does "
-                f"not support. Pin release={unreachable[0]} and upgrade one minor release at "
-                "a time, waiting for both workloads to become ready at each step."
+                f"Ceph CSI {old} -> {target} skips releases upstream does not support. "
+                f"Pin release={old}, then upgrade one minor release at a time (next: "
+                f"v{major}.{minor + 1}.x, see list-versions), waiting for both workloads "
+                "to become ready at each step."
             )
         if deployed - {target} and any(state.pending for state in states):
             # Converging on the target is allowed, but only one rollout at a time.
@@ -647,6 +684,7 @@ class CephCsiCharm(ops.CharmBase):
                     status.add(ops.WaitingStatus(failure_msg))
                     logger.warning("Encountered retriable installation error: %s", e)
                     raise status.ReconcilerError(failure_msg)
+            self._record_deployed_releases()
 
         self.stored.config_hash = config_hash
 
@@ -742,6 +780,7 @@ class CephCsiCharm(ops.CharmBase):
             ceph_pools,
         )
         self.stored.config_hash = 0
+        self.stored.deployed_releases = {}
 
     def _purge_manifest_by_name(self, name: str) -> None:
         """Purge resources created by this charm by manifest name."""

@@ -257,7 +257,9 @@ def test_downgrade_is_blocked(harness, lk_client, not_found):
     harness.update_config({"release": "v3.17.2"})
     harness.begin()
     deploy(lk_client, not_found, *releases(rbd="v3.18.2"))
-    assert "skips releases" in guard(harness)
+    message = guard(harness)
+    assert "downgrade" in message
+    assert "release=v3.18.2" in message
 
 
 def test_partial_known_transition_converges(harness, lk_client, not_found):
@@ -320,6 +322,89 @@ def test_deleted_workloads_can_be_recovered(harness, lk_client, not_found):
     harness.charm.install_manifests(2)
     assert harness.charm.stored.config_hash == 2
     assert applied_images(lk_client)
+
+
+def test_pin_hint_orders_releases_numerically(harness, lk_client, not_found):
+    harness.begin()
+    deploy(lk_client, not_found, *releases(rbd="v3.9.0", cephfs="v3.10.0"))
+    message = guard(harness)
+    assert "release=v3.9.0" in message
+    assert "next: v3.10.x" in message
+
+
+def test_disable_then_enable_cannot_bypass_the_guard(harness, lk_client, not_found):
+    """Disabling a component deletes its workloads; re-enabling must still be staged."""
+    harness.begin()
+    deploy(lk_client, not_found, *releases(rbd="v3.9.0"))
+    harness.charm.stored.deployed_releases = {"rbd": "v3.9.0"}
+    deploy(lk_client, not_found)  # the disable purged every RBD workload
+    assert "v3.9.0 -> v3.18.2 skips" in guard(harness)
+
+    harness.update_config({"release": "v3.9.0"})
+    assert guard(harness) is None  # redeploying the remembered release is allowed
+
+
+def test_applied_release_is_remembered(harness, lk_client, not_found):
+    harness.update_config({"release": "v3.17.2"})
+    harness.begin()
+    deploy(lk_client, not_found)
+    harness.charm.install_manifests(5)
+    assert dict(harness.charm.stored.deployed_releases) == {"rbd": "v3.17.2"}
+
+
+def test_live_workloads_win_over_the_remembered_release(harness, lk_client, not_found):
+    harness.begin()
+    harness.charm.stored.deployed_releases = {"rbd": "v3.9.0"}
+    deploy(lk_client, not_found, *releases(rbd="v3.17.2"))
+    assert guard(harness) is None
+
+
+@pytest.fixture
+def reconciling(harness):
+    """Reconcile on update-status through the evaluate/install steps only."""
+    harness.begin()
+    charm = harness.charm
+    charm.reconciler.reconcile_function = lambda _: charm.install_manifests(
+        config_hash=charm.evaluate_manifests()
+    )
+    return charm
+
+
+def test_update_status_applies_once_the_rollout_finishes(
+    harness, reconciling, lk_client, not_found
+):
+    deploy(lk_client, not_found, *releases(rbd="v3.17.2", ready=False))
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "waiting"
+    assert not harness.charm.reconciler.stored.reconciled
+    assert harness.charm.stored.config_hash == 0
+    lk_client.apply.assert_not_called()
+
+    deploy(lk_client, not_found, *releases(rbd="v3.17.2"))  # rollout finished
+    harness.charm.on.update_status.emit()
+    assert harness.charm.stored.config_hash != 0
+    assert applied_images(lk_client) == {IMAGE.format(harness.charm.config["release"])}
+    assert harness.charm.unit.status.name != "waiting"
+
+
+def test_pinning_the_deployed_release_unblocks_without_applying(
+    harness, reconciling, lk_client, not_found
+):
+    harness.update_config({"release": "v3.9.0"})
+    previous = reconciling.evaluate_manifests()
+    reconciling.stored.config_hash = previous  # the state before the refresh
+    harness.update_config(unset=["release"])  # refresh: new default
+    deploy(lk_client, not_found, *releases(rbd="v3.9.0"))
+
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name == "blocked"
+    lk_client.apply.assert_not_called()
+
+    harness.update_config({"release": "v3.9.0"})  # operator pins
+    harness.charm.on.update_status.emit()
+    assert harness.charm.unit.status.name != "blocked"
+    assert harness.charm.stored.config_hash == previous
+    lk_client.apply.assert_not_called()
 
 
 def test_api_failure_waits(harness, lk_client, api_error_klass):
