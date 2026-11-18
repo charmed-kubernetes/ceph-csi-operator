@@ -5,8 +5,9 @@
 
 import json
 import logging
+import re
 from functools import cached_property
-from typing import Any, Dict, List, Optional, Set, cast
+from typing import Any, Dict, List, NamedTuple, NoReturn, Optional, Set, Tuple, Union, cast
 
 import charms.contextual_status as status
 import charms.operator_libs_linux.v0.apt as apt
@@ -17,6 +18,7 @@ from interface_ceph_client import ceph_client  # type: ignore
 from lightkube import Client, KubeConfig
 from lightkube.core.exceptions import ApiError
 from lightkube.models.meta_v1 import ObjectMeta
+from lightkube.resources.apps_v1 import DaemonSet, Deployment
 from lightkube.resources.core_v1 import Namespace
 from lightkube.resources.storage_v1 import StorageClass
 from ops.manifests import Collector, HashableResource, ManifestClientError, ResourceAnalysis
@@ -29,6 +31,79 @@ from manifests_config import ConfigManifests
 from manifests_rbd import RBDManifests
 
 logger = logging.getLogger(__name__)
+
+# A Ceph CSI release, as used by upstream tags, charm config and manifest directories.
+RELEASE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+
+# The release pinned on a container image, e.g. ghcr.io/canonical/cdk/cephcsi/cephcsi:v3.18.2
+IMAGE_RELEASE = re.compile(rf":({RELEASE.pattern})$")
+
+
+class WorkloadState(NamedTuple):
+    """Observed state of the Ceph CSI workloads of one component."""
+
+    releases: Set[str]
+    """Releases pinned on the driver containers of the deployed workloads."""
+
+    indeterminate: bool
+    """True when a workload is deployed but its release cannot be established."""
+
+    pending: bool
+    """True when a deployed workload has not finished rolling out."""
+
+
+def _release_tuple(release: str) -> Optional[Tuple[int, int, int]]:
+    """Convert a 'vMAJOR.MINOR.PATCH' release into a comparable tuple."""
+    match = RELEASE.fullmatch(release)
+    return (int(match[1]), int(match[2]), int(match[3])) if match else None
+
+
+def _image_release(image: Optional[str]) -> Optional[str]:
+    """Read the release pinned on a container image."""
+    match = IMAGE_RELEASE.search(image or "")
+    return match[1] if match else None
+
+
+def _is_staged_upgrade(current: str, target: str) -> bool:
+    """Determine whether target is reachable from current in one upstream step.
+
+    Upstream supports upgrading a single minor release at a time and documents no
+    downgrade procedure: "we do not recommend any direct upgrades to 3.18 except
+    from 3.17 to 3.18" -- docs/ceph-csi-upgrade.md at v3.18.2.
+    """
+    old, new = _release_tuple(current), _release_tuple(target)
+    if old is None or new is None:
+        return False
+    return new >= old and new[0] == old[0] and new[1] - old[1] <= 1
+
+
+def _rollout_pending(obj: Union[DaemonSet, Deployment]) -> bool:
+    """Determine whether a deployed workload is still rolling out."""
+    meta = obj.metadata
+    if meta is None or obj.status is None:
+        return True
+    if (obj.status.observedGeneration or 0) < (meta.generation or 0):
+        return True
+    if isinstance(obj, Deployment):
+        state = obj.status
+        wanted = (obj.spec.replicas or 0) if obj.spec else 0
+        return (state.updatedReplicas or 0) < wanted or (state.readyReplicas or 0) < wanted
+    wanted = obj.status.desiredNumberScheduled or 0
+    return (obj.status.updatedNumberScheduled or 0) < wanted or (
+        obj.status.numberReady or 0
+    ) < wanted
+
+
+def _blocked(msg: str) -> NoReturn:
+    """Block the unit and escape the reconcile loop."""
+    status.add(ops.BlockedStatus(msg))
+    raise status.ReconcilerError(msg)
+
+
+def _waiting(msg: str) -> NoReturn:
+    """Set the unit waiting and escape the reconcile loop."""
+    status.add(ops.WaitingStatus(msg))
+    raise status.ReconcilerError(msg)
 
 
 class DynamicActiveStatus(ops.ActiveStatus):
@@ -191,7 +266,10 @@ class CephCsiCharm(ops.CharmBase):
         manifests = event.params.get("manifest", "")
         resources = event.params.get("resources", "")
         try:
+            self.check_release_upgrade()
             self.collector.apply_missing_resources(event, manifests, resources)
+        except status.ReconcilerError as e:
+            event.fail(str(e))
         except ManifestClientError as e:
             msg = "Failed to sync missing resources: "
             msg += " -> ".join(map(str, e.args))
@@ -469,11 +547,96 @@ class CephCsiCharm(ops.CharmBase):
 
         return new_hash
 
+    def _workload_state(self, component: str) -> WorkloadState:
+        """Inspect the deployed provisioner and nodeplugin of one component."""
+        manifest = self.collector.manifests[component]
+        namespace = str(self.stored.namespace)
+        driver = f"csi-{component}plugin"
+        releases: Set[str] = set()
+        indeterminate = pending = False
+
+        workloads: List[Tuple[Any, str]] = [
+            (Deployment, f"{driver}-provisioner"),
+            (DaemonSet, driver),
+        ]
+        for kind, name in workloads:
+            try:
+                obj: Union[DaemonSet, Deployment] = manifest.client.get(
+                    kind, name, namespace=namespace
+                )
+            except ApiError as exc:
+                if exc.status.code == 404:
+                    continue
+                logger.exception("Cannot read %s/%s in %s", kind.__name__, name, namespace)
+                _waiting("Waiting for Kubernetes API to read deployed Ceph CSI releases")
+
+            pod = obj.spec.template.spec if obj.spec else None
+            release = next(
+                (
+                    found
+                    for container in (pod.containers if pod else [])
+                    if container.name == driver
+                    for found in [_image_release(container.image)]
+                    if found
+                ),
+                None,
+            )
+            if release is None:
+                logger.warning("No release on %s/%s container %s", kind.__name__, name, driver)
+                indeterminate = True
+                continue
+            releases.add(release)
+            pending |= _rollout_pending(obj)
+
+        return WorkloadState(releases, indeterminate, pending)
+
+    def check_release_upgrade(self) -> None:
+        """Allow only the release transitions upstream documents as supported.
+
+        Ceph CSI supports moving one minor release at a time, so the deployed
+        release must be known and must be the target release or its immediate
+        predecessor. Applying manifests on top of an unknown or more distant
+        release is blocked with recovery instructions instead of attempted.
+        """
+        enabled = [
+            component
+            for component in ("rbd", "cephfs")
+            if self.collector.manifests[component].config["enabled"]
+        ]
+        if not enabled:
+            return
+        # RBD and CephFS share the single `release` option, so one target applies to both.
+        target = self.collector.manifests[enabled[0]].current_release
+        if _release_tuple(target) is None:
+            _blocked(f"Unsupported release '{target}'; run list-versions for valid releases")
+
+        states = [self._workload_state(component) for component in enabled]
+        deployed = {release for state in states for release in state.releases}
+        unreachable = sorted(r for r in deployed if not _is_staged_upgrade(r, target))
+
+        if any(state.indeterminate for state in states):
+            # A workload exists, but the release it runs cannot be read from its image.
+            _blocked(
+                "Cannot determine the deployed Ceph CSI release from the workload images. "
+                "Delete the unidentifiable Ceph CSI workloads, or restore a release tag on "
+                "their driver image, before upgrading one minor release at a time."
+            )
+        if unreachable:
+            _blocked(
+                f"Ceph CSI {', '.join(unreachable)} -> {target} skips releases upstream does "
+                f"not support. Pin release={unreachable[0]} and upgrade one minor release at "
+                "a time, waiting for both workloads to become ready at each step."
+            )
+        if deployed - {target} and any(state.pending for state in states):
+            # Converging on the target is allowed, but only one rollout at a time.
+            _waiting("Waiting for the running Ceph CSI rollout to finish")
+
     def install_manifests(self, config_hash: int) -> None:
         if cast(int, self.stored.config_hash) == config_hash:
             logger.info(f"No config changes detected. config_hash={config_hash}")
             return
         if self.unit.is_leader():
+            self.check_release_upgrade()
             self.unit.status = ops.MaintenanceStatus("Deploying CephCSI")
             self.unit.set_workload_version("")
             for manifest in self.collector.manifests.values():
