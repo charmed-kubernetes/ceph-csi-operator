@@ -52,92 +52,6 @@ juju integrate ceph-fs:ceph-mds ceph-mon:mds
 juju config ceph-csi cephfs-enable=True
 ```
 
-## Ceph CSI releases and upgrades
-
-The default release is **v3.18.2** for both RBD and CephFS. The charm also bundles
-v3.16.3 and v3.17.2, retaining all previously bundled releases. Bundling a release
-does not imply support on every Kubernetes version: upstream lists v3.18.2 and
-[v3.17.2][4] as tested with Kubernetes 1.34–1.36, whereas v3.16.3 is tested with
-1.32–1.34. The [v3.18.2 support matrix][3] requires Ceph Pacific (16.2.0) or newer
-for ordinary RBD and CephFS provisioning. Optional features have additional
-requirements; for example, CephFS volume group snapshots require Ceph Squid.
-
-**Before refreshing an existing charm, explicitly pin its currently deployed
-release** with `juju config ceph-csi release=<current-release>`. The previous
-charm schema default was v3.9.0, even though its newest bundle was v3.16.0.
-Ceph CSI upstream supports upgrading [one minor release at a time][5]
-(for example v3.17 → v3.18, "we do not recommend any direct upgrades to 3.18
-except from 3.17"), so the charm reads the release running in the provisioner
-Deployments and nodeplugin DaemonSets and refuses to apply a different release
-unless it is the same minor or the next one: the unit goes blocked with the
-release to pin, and neither the config hook nor the `sync-resources` action
-applies anything. While a previous release is still rolling out the unit waits.
-Step through the minors with `juju config ceph-csi release=<next-release>`,
-waiting for both the provisioner and nodeplugin workloads to become ready and
-checking existing PVC I/O each time. For a deployment on v3.16, the final steps
-are v3.16.3 → v3.17.2 → v3.18.2. A deployment on the previous default v3.9.0
-needs nine such steps: v3.10, v3.11, v3.12, v3.13, v3.14, v3.15, v3.16, v3.17
-and v3.18 (take the exact patch tags from `juju run ceph-csi/leader list-versions`).
-Every intermediate image must be available in the configured image registry.
-
-The charm remembers the release it last applied for each component, so
-disabling a component (`ceph-rbd-enable=false`, `cephfs-enable=false`) or
-deleting its workloads does not remove the staged-upgrade check: re-enabling
-it on a newer default is blocked until the remembered release is pinned and
-stepped. A component with no workloads and no remembered release (a new
-installation) is applied directly. A remembered release that contradicts the
-workloads that are actually running (more than one minor apart) is ignored, so
-there is always a release that can be pinned. **Limitations:** the record is
-kept in the charm's local state on the leader unit and is written only when the
-charm applies its manifests (not by `sync-resources`). After a leader change the
-new leader starts without it, and workloads deleted by hand before any release
-was recorded cannot be checked either; in both cases pin the release you know
-was deployed before re-enabling a component or refreshing. A remembered release
-that is ignored because it is incompatible with the running workloads is not
-checked: with the rbd record at v3.9.0 and no rbd workloads, cephfs running
-v3.18.2 and rbd re-enabled at target v3.18.2, the guard does not block and rbd
-jumps v3.9.0 → v3.18.2. There is a single global `release` option, so a
-guard-only fix would reintroduce the unsatisfiable (deadlocked) state. Mitigate by
-re-enabling and stepping both components together, with the one global `release`
-pinned and moved one minor at a time. If `release` is pinned back to
-the deployed release and the workloads are missing, run the `sync-resources`
-action to recreate them.
-
-If the unit reports that the deployed release cannot be determined, a driver
-image does not carry a `vX.Y.Z` tag (for example a digest, or an alternative
-tag such as `v3.17.2-rocky9`). Check the images with
-`kubectl -n <namespace> get daemonset,deployment -o wide`, and make the
-driver image tag visible again through the image registry or release settings.
-Do not delete the Ceph CSI workloads to get past this: deleting nodeplugin pods
-disrupts mounted volumes (CephFS FUSE mounts in particular must follow the
-controlled restart procedure in the [upgrade guide][5]) and the guard would
-then treat the namespace as a new installation unless a release was recorded.
-
-Before using v3.18 standard images on amd64, qualify the nodes against the
-[upstream CPU requirements][6]: the v3.18 images are built on Rocky Linux 10
-(first in v3.18.0; `build.env` of v3.17.2 and earlier still uses the
-`ceph/ceph:v20` base) and no longer run on older x86-64-v2 CPUs. Fleets on such
-CPUs can stay on v3.17.2, which is not affected. Upstream offers separately
-tagged Rocky Linux 9 alternatives, but this charm bundles the standard release
-manifests. Arm64 remains experimental upstream. Image availability and
-architecture support must be checked in the configured image registry before
-upgrading.
-
-The RBD bundles v3.12.0–v3.16.0 lack the upstream `csidriver.yaml` (a
-pre-existing updater omission); a fresh installation pinned to one of those
-releases does not create the `rbd.csi.ceph.com` CSIDriver. Upgrades through
-those releases are unaffected because the object created by v3.11 or earlier
-persists. v3.16.3 and newer include it.
-
-The charm retains upstream CSI sidecars, RBAC and snapshot API use; it does not
-install the cluster-wide snapshot controller or snapshot CRDs. Administrators
-must manage those prerequisites and their compatibility with the bundled
-snapshotter (v8.6.0 for v3.18.2). The v3.18.2 CephFS manifest enables
-`podInfoOnMount` and adds a controller container. Encrypted CephFS volumes also
-change their fscrypt RADOS lock namespace; review the [release notes][7] before
-upgrading. CephFS FUSE mounts need the controlled restart procedure in the
-[upgrade guide][5] to avoid disrupting application mounts.
-
 ## Verify things are working
 
 Check the **Charmed Kubernetes** cluster to verify Ceph cluster resources are
@@ -218,8 +132,3 @@ tox -e integration
 
 [1]: https://charmhub.io/kubernetes-control-plane
 [2]: https://charmhub.io/charmed-kubernetes
-[3]: https://github.com/ceph/ceph-csi/blob/v3.18.2/README.md#support-matrix
-[4]: https://github.com/ceph/ceph-csi/blob/v3.17.2/README.md#known-to-work-co-platforms
-[5]: https://github.com/ceph/ceph-csi/blob/v3.18.2/docs/ceph-csi-upgrade.md
-[6]: https://github.com/ceph/ceph-csi/blob/v3.18.2/README.md#alternative-images-for-older-cpus
-[7]: https://github.com/ceph/ceph-csi/releases/tag/v3.18.2

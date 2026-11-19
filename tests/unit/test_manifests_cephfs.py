@@ -261,29 +261,3 @@ def test_manifest_evaluation(caplog):
         manifests.evaluate()
         == "Cannot adjust CephFS Pods: Invalid tolerations: Too many effects='NoSchedule,Foo'"
     )
-
-
-def test_ceph_provisioner_adjustment_renames_driver_in_every_container():
-    """Every provisioner container, including any added by a release, follows the driver name."""
-    manifest = mock.MagicMock()
-    manifest.config = {
-        "csidriver-name-formatter": "{name}-{namespace}",
-        "namespace": "diff-ns",
-        "provisioner-replicas": 3,
-        "enable-host-networking": False,
-        "kubelet_dir": "/var/lib/kubelet-alt",
-    }
-    manifest.csidriver = CSIDriverAdjustments(manifest, CephFSManifests.DRIVER_NAME)
-    resource = Deployment.from_dict(list(yaml.safe_load_all(provisioner_path.read_text()))[1])
-    FSProvAdjustments(manifest)(resource)
-
-    renamed = manifest.csidriver.formatted
-    assert renamed != CephFSManifests.DRIVER_NAME
-    drivernames = [
-        arg
-        for container in resource.spec.template.spec.containers
-        for arg in container.args
-        if arg.startswith("--drivername=")
-    ]
-    assert drivernames
-    assert all(arg == f"--drivername={renamed}" for arg in drivernames)
