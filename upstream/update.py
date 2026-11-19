@@ -37,6 +37,7 @@ SOURCES = dict(
             "csi-provisioner-rbac.yaml",
             "csi-rbdplugin-provisioner.yaml",
             "csi-rbdplugin.yaml",
+            "csidriver.yaml",
         ],
         version_parser=VersionInfo.parse,
         minimum="v3.7.2",

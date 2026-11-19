@@ -39,6 +39,9 @@ jobs:
     env:
       # Set default values
       EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest"
+      # v3.18 images are built on Rocky Linux 10; XFS volumes they format do not mount
+      # on the jammy kernel, so the functional tests run the last Ceph base image release.
+      TEST_RELEASE: "v3.17.2"
     steps:
       - name: Check out code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -58,11 +61,12 @@ jobs:
           credentials-yaml: ${{ secrets.CREDENTIALS_YAML }}
           clouds-yaml: ${{ secrets.CLOUDS_YAML }}
           bootstrap-constraints: "arch=amd64 cores=2 mem=4G"
+          # Machines are deployed on jammy (see tests/functional/overlay.yaml), and vSphere
+          # can only provision the base the controller was bootstrapped with.
           bootstrap-options: >-
-            ${{ vars.VSPHERE_BOOTSTRAP_NOBLE }}
-            ${{ vars.VSPHERE_BOOTSTRAP_DATASTORE }}
-            ${{ vars.VSPHERE_BOOTSTRAP_VLAN_2763 }}
-            ${{ vars.VSPHERE_BOOTSTRAP_HARDWARE_VERSION }}
+            ${{ secrets.JAMMY_BOOTSTRAP_OPTIONS }}
+            --model-default datastore=vsanDatastore
+            --model-default primary-network=VLAN_2763
             --config caas-image-repo=ghcr.io/canonical/cdk/jujusolutions
 
       - if: ${{ needs.charm-source.outputs.channel }}
