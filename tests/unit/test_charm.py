@@ -355,12 +355,9 @@ def test_install_manifests_non_leader(harness):
 
 
 @mock.patch("charm.CephCsiCharm.ceph_context", new_callable=mock.PropertyMock)
-def test_install_manifests_leader(ceph_context, harness, lk_client, api_error_klass):
+def test_install_manifests_leader(ceph_context, harness, lk_client):
     """Test that install_manifests operates on leaders."""
     harness.begin()
-    not_found = api_error_klass()
-    not_found.status.code = 404
-    lk_client.get.side_effect = not_found  # no Ceph CSI workload is deployed yet
     ceph_context.return_value = {
         "auth": "cephx",
         "fsid": "12345",
