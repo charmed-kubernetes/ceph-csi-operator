@@ -39,6 +39,9 @@ jobs:
     env:
       # Set default values
       EXTRA_ARGS: "--basetemp=/home/ubuntu/pytest"
+      # v3.18 images are built on Rocky Linux 10; XFS volumes they format do not mount
+      # on the jammy kernel, so the functional tests run the last Ceph base image release.
+      TEST_RELEASE: "v3.17.2"
     steps:
       - name: Check out code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
