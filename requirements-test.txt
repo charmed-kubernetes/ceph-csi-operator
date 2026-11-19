@@ -1,5 +1,5 @@
 -r requirements.txt
 coverage
-# pytest-operator's pytest-asyncio 0.21 is incompatible with pytest 9.2.
-pytest<9.2
+# pytest-operator's pytest-asyncio 0.21 is incompatible with pytest 9.
+pytest<9
 pytest-operator
